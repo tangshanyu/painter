@@ -1,5 +1,5 @@
 import React from 'react';
-import { DrawingElement, Point } from '../types';
+import { DrawingElement, Point, ArrowStyle } from '../types';
 import { HIGHLIGHTER_OPACITY } from '../constants';
 
 // Helper to load images for the canvas renderer
@@ -43,8 +43,16 @@ const wrapText = (ctx: CanvasRenderingContext2D, text: string, x: number, y: num
 };
 
 // Helper to draw an arrow
-const drawArrow = (ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, strokeWidth: number) => {
-    const headLength = 15 + strokeWidth; 
+const drawArrow = (
+    ctx: CanvasRenderingContext2D, 
+    x: number, 
+    y: number, 
+    w: number, 
+    h: number, 
+    strokeWidth: number,
+    style: ArrowStyle = 'filled'
+) => {
+    const headLength = 15 + strokeWidth * 2; 
     const startX = x;
     const startY = y;
     const endX = x + w;
@@ -52,18 +60,68 @@ const drawArrow = (ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
     
     const angle = Math.atan2(endY - startY, endX - startX);
     
+    // Draw Shaft (Line)
+    // We stop the line a bit before the end so it doesn't poke through the hollow head
+    const lineEndOffset = style === 'outline' ? headLength * 0.8 : 0;
+    const lineEndX = endX - lineEndOffset * Math.cos(angle);
+    const lineEndY = endY - lineEndOffset * Math.sin(angle);
+
     ctx.beginPath();
     ctx.moveTo(startX, startY);
-    ctx.lineTo(endX, endY);
+    ctx.lineTo(lineEndX, lineEndY);
     ctx.stroke();
 
-    // Arrow head
+    // Draw Arrow Head
     ctx.beginPath();
+    // Tip
     ctx.moveTo(endX, endY);
+    // Left corner
     ctx.lineTo(endX - headLength * Math.cos(angle - Math.PI / 6), endY - headLength * Math.sin(angle - Math.PI / 6));
-    ctx.moveTo(endX, endY);
+    // Back center (indent) - optional, let's keep it simple triangle for consistency
+    // ctx.lineTo(endX - headLength * 0.6 * Math.cos(angle), endY - headLength * 0.6 * Math.sin(angle));
+    // Right corner
     ctx.lineTo(endX - headLength * Math.cos(angle + Math.PI / 6), endY - headLength * Math.sin(angle + Math.PI / 6));
+    
+    ctx.closePath(); // Close the triangle
+
+    if (style === 'filled') {
+        ctx.fill();
+    } else {
+        // Outline
+        ctx.fillStyle = 'transparent'; // Or we could clear content? No, transparent is better for overlay
+        // To prevent the line from showing inside the head if we didn't offset it correctly, 
+        // we can fill with white/background? But that's hard to know.
+        // We rely on lineEndOffset above to stop the line short.
+        ctx.lineWidth = strokeWidth; // Ensure stroke width matches
+        ctx.stroke();
+    }
+};
+
+const drawStamp = (
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    text: string,
+    color: string,
+    strokeWidth: number
+) => {
+    // Radius based on strokeWidth (reused size logic)
+    // small dot (2) -> r=10, large dot (20) -> r=30
+    const radius = 10 + strokeWidth; 
+    
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, 2 * Math.PI);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
     ctx.stroke();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `bold ${radius * 1.2}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, x, y + radius * 0.1); // slight offset for visual center
 };
 
 export const renderCanvas = (
@@ -140,6 +198,12 @@ const drawSelectionBorder = (ctx: CanvasRenderingContext2D, el: DrawingElement) 
     y = minY;
     w = maxX - minX;
     h = maxY - minY;
+  } else if (el.type === 'stamp') {
+      const radius = 10 + el.strokeWidth;
+      x = (el.x || 0) - radius;
+      y = (el.y || 0) - radius;
+      w = radius * 2;
+      h = radius * 2;
   }
 
   // Normalize Rect/Arrow for border drawing (handle negative width/height)
@@ -219,7 +283,11 @@ const drawElement = (ctx: CanvasRenderingContext2D, el: DrawingElement) => {
     }
   } else if (el.type === 'arrow') {
       if (el.x !== undefined && el.y !== undefined && el.width !== undefined && el.height !== undefined) {
-          drawArrow(ctx, el.x, el.y, el.width, el.height, el.strokeWidth);
+          drawArrow(ctx, el.x, el.y, el.width, el.height, el.strokeWidth, el.arrowStyle || 'filled');
+      }
+  } else if (el.type === 'stamp') {
+      if (el.x !== undefined && el.y !== undefined && el.text) {
+          drawStamp(ctx, el.x, el.y, el.text, el.color, el.strokeWidth);
       }
   } else if (el.type === 'text') {
      if (el.x !== undefined && el.y !== undefined && el.text) {
@@ -282,6 +350,16 @@ export const isPointInElement = (x: number, y: number, el: DrawingElement, ctx: 
         const padding = 5;
         // For arrow, checking the diagonal line is hard, bounding box is acceptable for now
         return x >= bx - padding && x <= bx + bw + padding && y >= by - padding && y <= by + bh + padding;
+    }
+    else if (el.type === 'stamp') {
+        // Circle hit detection
+        if (el.x !== undefined && el.y !== undefined) {
+            const radius = 10 + el.strokeWidth;
+            const dx = x - el.x;
+            const dy = y - el.y;
+            return dx*dx + dy*dy <= radius*radius;
+        }
+        return false;
     }
     else if ((el.type === 'pen' || el.type === 'highlighter') && el.points) {
         // Bounding box for paths roughly

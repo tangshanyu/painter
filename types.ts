@@ -1,10 +1,12 @@
 
-export type ToolType = 'select' | 'pen' | 'highlighter' | 'rect' | 'arrow' | 'text';
+export type ToolType = 'select' | 'pen' | 'highlighter' | 'rect' | 'arrow' | 'text' | 'stamp';
 
 export interface Point {
   x: number;
   y: number;
 }
+
+export type ArrowStyle = 'filled' | 'outline';
 
 export interface DrawingElement {
   id: string;
@@ -14,11 +16,12 @@ export interface DrawingElement {
   y?: number; // For rect/text/image/arrow
   width?: number; // For rect/image/arrow (as vector x)
   height?: number; // For rect/image/arrow (as vector y)
-  text?: string; // For text
+  text?: string; // For text and STAMP (holds the number)
   imageData?: string; // Base64 for image layer
   color: string;
   strokeWidth: number;
   font?: string;
+  arrowStyle?: ArrowStyle; // New property
 }
 
 export interface TabData {
@@ -38,4 +41,5 @@ export interface ToolSettings {
   strokeWidth: number;
   fontSize: number;
   opacity: number;
+  arrowStyle: ArrowStyle;
 }

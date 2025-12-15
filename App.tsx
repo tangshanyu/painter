@@ -13,6 +13,10 @@ const DEFAULT_HEIGHT = 600;
 function App() {
   // Global counter for sequential naming (e.g. Image_001, Image_002)
   const [tabCounter, setTabCounter] = useState(1);
+  const [darkMode, setDarkMode] = useState(false);
+  
+  // Stamp Counter
+  const [stampCounter, setStampCounter] = useState(1);
   
   const [tabs, setTabs] = useState<TabData[]>([
     {
@@ -27,6 +31,15 @@ function App() {
       scale: 1,
     }
   ]);
+
+  // Dark Mode Effect
+  useEffect(() => {
+    if (darkMode) {
+        document.documentElement.classList.add('dark');
+    } else {
+        document.documentElement.classList.remove('dark');
+    }
+  }, [darkMode]);
   
   // Update counter after initial render so next is 002
   useEffect(() => {
@@ -44,6 +57,10 @@ function App() {
   const updateTab = useCallback((id: string, updates: Partial<TabData>) => {
     setTabs(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
   }, []);
+
+  const handleRenameTab = (id: string, newTitle: string) => {
+      updateTab(id, { title: newTitle });
+  };
 
   // --- Auto Fit Logic ---
   const calculateFitScale = (imgW: number, imgH: number) => {
@@ -70,7 +87,8 @@ function App() {
             setToolSettings(prev => ({
                 ...prev,
                 color: el.color,
-                strokeWidth: el.strokeWidth
+                strokeWidth: el.strokeWidth,
+                arrowStyle: el.arrowStyle || 'filled'
             }));
         }
     }
@@ -84,14 +102,23 @@ function App() {
       if (selectedElementId) {
           const updatedElements = activeTab.elements.map(el => {
               if (el.id === selectedElementId) {
-                  return { ...el, color: newSettings.color, strokeWidth: newSettings.strokeWidth };
+                  return { 
+                      ...el, 
+                      color: newSettings.color, 
+                      strokeWidth: newSettings.strokeWidth,
+                      arrowStyle: newSettings.arrowStyle
+                  };
               }
               return el;
           });
           
           // Only update if something actually changed to avoid loop
           const currentEl = activeTab.elements.find(e => e.id === selectedElementId);
-          if (currentEl && (currentEl.color !== newSettings.color || currentEl.strokeWidth !== newSettings.strokeWidth)) {
+          if (currentEl && (
+              currentEl.color !== newSettings.color || 
+              currentEl.strokeWidth !== newSettings.strokeWidth ||
+              currentEl.arrowStyle !== newSettings.arrowStyle
+          )) {
              const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
              newHistory.push(updatedElements);
              updateTab(activeTabId, { 
@@ -398,13 +425,14 @@ function App() {
   };
 
   return (
-    <div className="flex flex-col h-screen bg-slate-100">
+    <div className="flex flex-col h-screen bg-slate-100 dark:bg-slate-900 transition-colors">
       <TabList 
         tabs={tabs} 
         activeTabId={activeTabId} 
         onSwitch={(id) => { setActiveTabId(id); setSelectedElementId(null); }} 
         onClose={closeTab}
         onAdd={() => createNewTab()}
+        onRename={handleRenameTab}
       />
       
       <Toolbar 
@@ -422,6 +450,10 @@ function App() {
         onSave={handleSave}
         onSaveAll={handleSaveAll}
         onCopy={handleCopy}
+        darkMode={darkMode}
+        toggleDarkMode={() => setDarkMode(!darkMode)}
+        stampCounter={stampCounter}
+        setStampCounter={setStampCounter}
       />
 
       <Editor 
@@ -432,27 +464,42 @@ function App() {
         updateTab={updateTab}
         selectedElementId={selectedElementId}
         setSelectedElementId={setSelectedElementId}
+        stampCounter={stampCounter}
+        onStamp={() => setStampCounter(c => c + 1)}
       />
       
       {/* Footer Info - Compact Mode */}
-      <div className="bg-brand-50 border-t border-brand-100 px-3 py-1 text-xs text-brand-800 flex justify-between items-center select-none font-medium z-10 h-7">
-         <div className="flex gap-4 items-center">
-             <span className="opacity-80">{activeTab.canvasWidth} x {activeTab.canvasHeight} px</span>
+      <div className="bg-brand-50 dark:bg-slate-800 border-t border-brand-100 dark:border-slate-700 px-3 py-1 text-xs text-brand-800 dark:text-brand-300 flex justify-between items-center select-none font-medium z-10 h-7 transition-colors">
+         <div className="flex gap-1 items-center">
+             <input 
+                type="number" 
+                value={activeTab.canvasWidth} 
+                onChange={(e) => updateTab(activeTabId, { canvasWidth: parseInt(e.target.value) || 100 })}
+                className="w-10 bg-transparent text-right hover:bg-white/50 dark:hover:bg-slate-700 focus:bg-white dark:focus:bg-slate-700 focus:outline-none rounded px-0.5"
+             />
+             <span className="opacity-80">x</span>
+             <input 
+                type="number" 
+                value={activeTab.canvasHeight} 
+                onChange={(e) => updateTab(activeTabId, { canvasHeight: parseInt(e.target.value) || 100 })}
+                className="w-10 bg-transparent text-left hover:bg-white/50 dark:hover:bg-slate-700 focus:bg-white dark:focus:bg-slate-700 focus:outline-none rounded px-0.5"
+             />
+             <span className="opacity-80 ml-1">px</span>
          </div>
 
          {/* Zoom Controls */}
          <div className="flex items-center gap-2">
             <button 
                 onClick={() => setScale(calculateFitScale(activeTab.canvasWidth, activeTab.canvasHeight))}
-                className="p-0.5 hover:bg-brand-100 rounded text-brand-700"
+                className="p-0.5 hover:bg-brand-100 dark:hover:bg-slate-700 rounded text-brand-700 dark:text-brand-400"
                 title="Fit to Screen"
             >
                 <Maximize size={12} />
             </button>
-            <div className="flex items-center gap-1.5 bg-white px-1.5 py-0.5 rounded border border-brand-200 shadow-sm">
+            <div className="flex items-center gap-1.5 bg-white dark:bg-slate-700 px-1.5 py-0.5 rounded border border-brand-200 dark:border-slate-600 shadow-sm">
                 <button 
                     onClick={() => setScale(Math.max(0.1, activeTab.scale - 0.1))}
-                    className="hover:text-brand-600"
+                    className="hover:text-brand-600 dark:hover:text-brand-300 dark:text-slate-300"
                 >
                     <Minus size={10} />
                 </button>
@@ -464,17 +511,17 @@ function App() {
                     step="0.05"
                     value={activeTab.scale}
                     onChange={(e) => setScale(parseFloat(e.target.value))}
-                    className="w-20 h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-brand-600"
+                    className="w-20 h-1 bg-slate-200 dark:bg-slate-600 rounded-lg appearance-none cursor-pointer accent-brand-600 dark:accent-brand-500"
                 />
 
                 <button 
                     onClick={() => setScale(Math.min(3.0, activeTab.scale + 0.1))}
-                    className="hover:text-brand-600"
+                    className="hover:text-brand-600 dark:hover:text-brand-300 dark:text-slate-300"
                 >
                     <Plus size={10} />
                 </button>
                 
-                <span className="w-8 text-right text-[10px]">{(activeTab.scale * 100).toFixed(0)}%</span>
+                <span className="w-8 text-right text-[10px] dark:text-slate-300">{(activeTab.scale * 100).toFixed(0)}%</span>
             </div>
          </div>
 

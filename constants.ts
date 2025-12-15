@@ -5,6 +5,7 @@ export const DEFAULT_TOOL_SETTINGS: ToolSettings = {
   strokeWidth: 4,
   fontSize: 24,
   opacity: 1,
+  arrowStyle: 'filled',
 };
 
 export const HIGHLIGHTER_OPACITY = 0.4;

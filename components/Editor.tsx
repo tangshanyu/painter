@@ -16,6 +16,8 @@ interface EditorProps {
   updateTab: (id: string, updates: Partial<TabData>) => void;
   selectedElementId: string | null;
   setSelectedElementId: (id: string | null) => void;
+  stampCounter: number;
+  onStamp: () => void;
 }
 
 const Editor: React.FC<EditorProps> = ({ 
@@ -24,7 +26,9 @@ const Editor: React.FC<EditorProps> = ({
   toolSettings, 
   updateTab,
   selectedElementId,
-  setSelectedElementId
+  setSelectedElementId,
+  stampCounter,
+  onStamp
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -200,6 +204,29 @@ const Editor: React.FC<EditorProps> = ({
     setIsDrawing(true);
     setDragStartPos(pos); 
 
+    // Handle Stamp Immediately
+    if (activeTool === 'stamp') {
+        const newElement: DrawingElement = {
+            id: Date.now().toString(),
+            type: 'stamp',
+            x: pos.x,
+            y: pos.y,
+            width: 0, 
+            height: 0,
+            color: toolSettings.color,
+            strokeWidth: toolSettings.strokeWidth,
+            text: stampCounter.toString()
+        };
+        const newElements = [...tab.elements, newElement];
+        const newHistory = tab.history.slice(0, tab.historyIndex + 1);
+        newHistory.push(newElements);
+        updateTab(tab.id, { elements: newElements, history: newHistory, historyIndex: newHistory.length - 1 });
+        setSelectedElementId(newElement.id);
+        setIsDrawing(false); // Stamp is instant, not dragged
+        onStamp(); // Increment counter
+        return;
+    }
+
     if (activeTool === 'text') {
         setCurrentElement({
             id: 'temp-text',
@@ -225,6 +252,7 @@ const Editor: React.FC<EditorProps> = ({
       y: (activeTool === 'rect' || activeTool === 'arrow') ? pos.y : undefined,
       width: 0,
       height: 0,
+      arrowStyle: activeTool === 'arrow' ? toolSettings.arrowStyle : undefined,
     };
     setCurrentElement(startElement);
   };
@@ -288,7 +316,7 @@ const Editor: React.FC<EditorProps> = ({
       const updatedElements = tab.elements.map(el => {
         if (el.id !== selectedElementId) return el;
         const newEl = { ...el };
-        if (['rect', 'image', 'text', 'arrow'].includes(newEl.type)) {
+        if (['rect', 'image', 'text', 'arrow', 'stamp'].includes(newEl.type)) {
           newEl.x = (el.x || 0) + dx;
           newEl.y = (el.y || 0) + dy;
         } else if ((newEl.type === 'pen' || newEl.type === 'highlighter') && newEl.points) {
@@ -401,11 +429,11 @@ const Editor: React.FC<EditorProps> = ({
   return (
     <div 
       ref={containerRef} 
-      className="flex-1 bg-slate-200 overflow-auto flex items-center justify-center p-8 relative"
+      className="flex-1 bg-slate-200 dark:bg-slate-950 overflow-auto flex items-center justify-center p-8 relative transition-colors"
       onDragOver={(e) => e.preventDefault()}
     >
       <div 
-        className="relative bg-white shadow-lg shadow-slate-400/50"
+        className="relative bg-white shadow-lg shadow-slate-400/50 dark:shadow-black/50"
         style={{ 
           width: tab.canvasWidth * tab.scale, 
           height: tab.canvasHeight * tab.scale,
