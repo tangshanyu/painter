@@ -35,6 +35,9 @@
         scrollbar-width: none;
       }
     </style>
+  <!-- 注意：如果使用 Vite 打包部署，Import Map 可能會與 package.json 衝突，
+       但在沒有 node_modules 的純靜態環境下這有助於理解依賴。
+       Vercel 部署主要是靠下方的 script module 進入點。 -->
   <script type="importmap">
 {
   "imports": {
@@ -48,5 +51,7 @@
 </head>
   <body class="bg-slate-100 text-slate-800 h-screen w-screen overflow-hidden selection:bg-brand-100">
     <div id="root"></div>
+    <!-- 這是修復 Vercel 部署的關鍵：明確指定進入點 -->
+    <script type="module" src="/index.tsx"></script>
   </body>
 </html>
