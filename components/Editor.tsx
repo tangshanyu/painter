@@ -84,8 +84,8 @@ const Editor: React.FC<EditorProps> = ({
     canvas.width = tab.canvasWidth;
     canvas.height = tab.canvasHeight;
 
-    renderCanvas(canvas, ctx, bgImage, tab.elements, currentElement, selectedElementId);
-  }, [tab.elements, tab.canvasWidth, tab.canvasHeight, bgImage, currentElement, selectedElementId]);
+    renderCanvas(canvas, ctx, bgImage, tab.elements, currentElement, selectedElementId, tab.scale);
+  }, [tab.elements, tab.canvasWidth, tab.canvasHeight, bgImage, currentElement, selectedElementId, tab.scale]);
 
   // Commit Text Helper
   const commitText = useCallback(() => {
@@ -123,7 +123,7 @@ const Editor: React.FC<EditorProps> = ({
     if (!canvasRef.current) return;
     const ctx = canvasRef.current.getContext('2d');
     if (!ctx) return;
-    const pos = getMousePos(canvasRef.current, e, 1);
+    const pos = getMousePos(canvasRef.current, e);
 
     // Find element
     for (let i = tab.elements.length - 1; i >= 0; i--) {
@@ -157,7 +157,7 @@ const Editor: React.FC<EditorProps> = ({
       return; 
     }
 
-    const pos = getMousePos(canvasRef.current, e, 1);
+    const pos = getMousePos(canvasRef.current, e);
 
     // --- PRIORITY 1: CHECK RESIZE HANDLE (IN ALL MODES) ---
     if (selectedElementId) {
@@ -231,7 +231,7 @@ const Editor: React.FC<EditorProps> = ({
 
   const handleMouseMove = (e: React.MouseEvent) => {
     if (!canvasRef.current) return;
-    const pos = getMousePos(canvasRef.current, e, 1);
+    const pos = getMousePos(canvasRef.current, e);
 
     // --- CURSOR UPDATES ---
     if (!isDrawing && !isDragging && !resizeState) {
@@ -406,7 +406,13 @@ const Editor: React.FC<EditorProps> = ({
     >
       <div 
         className="relative bg-white shadow-lg shadow-slate-400/50"
-        style={{ width: tab.canvasWidth, height: tab.canvasHeight }}
+        style={{ 
+          width: tab.canvasWidth * tab.scale, 
+          height: tab.canvasHeight * tab.scale,
+          // Using strict dimensions ensures scrollbars appear on the parent when zoomed
+          minWidth: tab.canvasWidth * tab.scale,
+          minHeight: tab.canvasHeight * tab.scale,
+        }}
       >
         <canvas
           ref={canvasRef}
@@ -415,7 +421,11 @@ const Editor: React.FC<EditorProps> = ({
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
           onDoubleClick={handleDoubleClick}
-          style={{ cursor }}
+          style={{ 
+            cursor, 
+            width: '100%', 
+            height: '100%' 
+          }}
           className="block"
         />
 
@@ -434,11 +444,12 @@ const Editor: React.FC<EditorProps> = ({
             }}
             style={{
               position: 'absolute',
-              left: textInput.x,
-              top: textInput.y,
-              width: textInput.width,
-              height: textInput.height,
-              font: `${toolSettings.strokeWidth * 6}px sans-serif`,
+              left: textInput.x * tab.scale,
+              top: textInput.y * tab.scale,
+              width: textInput.width * tab.scale,
+              height: textInput.height * tab.scale,
+              fontSize: `${toolSettings.strokeWidth * 6 * tab.scale}px`,
+              fontFamily: 'sans-serif',
               lineHeight: '1.2',
               color: toolSettings.color,
               background: 'rgba(255, 255, 255, 0.8)',

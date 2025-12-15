@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { Minus, Plus, Maximize } from 'lucide-react';
 import TabList from './components/TabList';
 import Toolbar from './components/Toolbar';
 import Editor from './components/Editor';
@@ -43,6 +44,20 @@ function App() {
   const updateTab = useCallback((id: string, updates: Partial<TabData>) => {
     setTabs(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
   }, []);
+
+  // --- Auto Fit Logic ---
+  const calculateFitScale = (imgW: number, imgH: number) => {
+    const availableW = window.innerWidth - 64; // Padding
+    const availableH = window.innerHeight - 180; // Header + Footer space approx
+    
+    if (imgW <= 0 || imgH <= 0) return 1;
+
+    const scaleW = availableW / imgW;
+    const scaleH = availableH / imgH;
+    
+    // Fit entire image, max 1.0 (don't zoom in pixelated) unless very small
+    return Math.min(scaleW, scaleH, 1);
+  };
 
   // --- Sync Selection <-> Toolbar ---
   
@@ -107,6 +122,12 @@ function App() {
     const title = `Image_${String(tabCounter).padStart(3, '0')}`;
     setTabCounter(prev => prev + 1);
 
+    // Calc auto scale if image is present
+    let initialScale = 1;
+    if (imgData) {
+        initialScale = calculateFitScale(w, h);
+    }
+
     const newTab: TabData = {
       id: newId,
       title: title,
@@ -116,7 +137,7 @@ function App() {
       historyIndex: 0,
       canvasWidth: w,
       canvasHeight: h,
-      scale: 1,
+      scale: initialScale,
     };
     setTabs([...tabs, newTab]);
     setActiveTabId(newId);
@@ -159,11 +180,13 @@ function App() {
            img.onload = () => {
              // 1. If empty tab, set as background
              if (!activeTab.imageDataUrl && activeTab.elements.length === 0) {
+                const autoScale = calculateFitScale(img.width, img.height);
                 updateTab(activeTabId, {
                   imageDataUrl: dataUrl,
                   canvasWidth: img.width,
                   canvasHeight: img.height,
-                  title: 'Pasted Image'
+                  title: 'Pasted Image',
+                  scale: autoScale
                 });
              } else {
                 // 2. Paste as Layer
@@ -242,8 +265,36 @@ function App() {
       }
   }, [selectedElementId, activeTab, activeTabId, updateTab]);
 
+  const handleCopy = async () => {
+      // Force deselect so the selection border isn't copied
+      setSelectedElementId(null);
+      
+      // Give React a frame to re-render the canvas without the selection border
+      setTimeout(() => {
+          const canvas = document.querySelector('canvas');
+          if (canvas) {
+              canvas.toBlob(async (blob) => {
+                  if (blob) {
+                      try {
+                        await navigator.clipboard.write([
+                            new ClipboardItem({ 'image/png': blob })
+                        ]);
+                        // Optional: Show a toast, but keeping it silent is more native-like for Ctrl+C
+                      } catch (err) {
+                          console.error('Failed to copy', err);
+                          alert('Failed to copy to clipboard.');
+                      }
+                  }
+              });
+          }
+      }, 50);
+  };
+
   useEffect(() => {
       const handleKeyDown = (e: KeyboardEvent) => {
+          const target = e.target as HTMLElement;
+          const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA';
+
           if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
               if (e.shiftKey) performRedo();
               else performUndo();
@@ -251,8 +302,13 @@ function App() {
           } else if ((e.metaKey || e.ctrlKey) && e.key === 'y') {
               performRedo();
               e.preventDefault();
+          } else if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
+              if (!isInput) {
+                  e.preventDefault();
+                  handleCopy();
+              }
           } else if (e.key === 'Delete' || e.key === 'Backspace') {
-              if ((e.target as HTMLElement).tagName !== 'TEXTAREA') {
+              if (!isInput) {
                   handleDeleteSelected();
               }
           } else if (e.key === 'Escape') {
@@ -263,7 +319,7 @@ function App() {
       };
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [performUndo, performRedo, handleDeleteSelected]);
+  }, [performUndo, performRedo, handleDeleteSelected, handleCopy]);
 
   const handleClearAll = () => {
       if (window.confirm('Clear all drawings and layers? (Background image will remain)')) {
@@ -291,25 +347,8 @@ function App() {
     }, 50);
   };
 
-  const handleCopy = async () => {
-      setSelectedElementId(null);
-      setTimeout(() => {
-          const canvas = document.querySelector('canvas');
-          if (canvas) {
-              canvas.toBlob(async (blob) => {
-                  if (blob) {
-                      try {
-                        await navigator.clipboard.write([
-                            new ClipboardItem({ 'image/png': blob })
-                        ]);
-                        alert('Copied to clipboard!');
-                      } catch (err) {
-                          alert('Failed to copy.');
-                      }
-                  }
-              });
-          }
-      }, 50);
+  const setScale = (newScale: number) => {
+      updateTab(activeTabId, { scale: newScale });
   };
 
   return (
@@ -349,15 +388,53 @@ function App() {
       />
       
       {/* Footer Info */}
-      <div className="bg-brand-50 border-t border-brand-100 px-4 py-1.5 text-xs text-brand-800 flex justify-between items-center select-none font-medium">
+      <div className="bg-brand-50 border-t border-brand-100 px-4 py-1.5 text-xs text-brand-800 flex justify-between items-center select-none font-medium z-10">
          <div className="flex gap-6 items-center">
-             <span className="bg-white px-2 py-0.5 rounded border border-brand-200">{activeTab.canvasWidth} x {activeTab.canvasHeight} px</span>
-             <span className="bg-white px-2 py-0.5 rounded border border-brand-200">Scale: {(activeTab.scale * 100).toFixed(0)}%</span>
+             <span className="bg-white px-2 py-0.5 rounded border border-brand-200 shadow-sm">{activeTab.canvasWidth} x {activeTab.canvasHeight} px</span>
          </div>
-         <div className="flex gap-4 opacity-75">
-             <span>Esc: Select Tool</span>
-             <span>Del: Delete Selected</span>
-             <span>Ctrl+Z: Undo</span>
+
+         {/* Zoom Controls */}
+         <div className="flex items-center gap-3">
+            <button 
+                onClick={() => setScale(calculateFitScale(activeTab.canvasWidth, activeTab.canvasHeight))}
+                className="p-1 hover:bg-brand-100 rounded text-brand-700"
+                title="Fit to Screen"
+            >
+                <Maximize size={14} />
+            </button>
+            <div className="flex items-center gap-2 bg-white px-2 py-0.5 rounded border border-brand-200 shadow-sm">
+                <button 
+                    onClick={() => setScale(Math.max(0.1, activeTab.scale - 0.1))}
+                    className="hover:text-brand-600"
+                >
+                    <Minus size={12} />
+                </button>
+                
+                <input 
+                    type="range" 
+                    min="0.1" 
+                    max="3.0" 
+                    step="0.05"
+                    value={activeTab.scale}
+                    onChange={(e) => setScale(parseFloat(e.target.value))}
+                    className="w-32 h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-brand-600"
+                />
+
+                <button 
+                    onClick={() => setScale(Math.min(3.0, activeTab.scale + 0.1))}
+                    className="hover:text-brand-600"
+                >
+                    <Plus size={12} />
+                </button>
+                
+                <span className="w-10 text-right">{(activeTab.scale * 100).toFixed(0)}%</span>
+            </div>
+         </div>
+
+         <div className="flex gap-4 opacity-75 hidden sm:flex">
+             <span>Esc: Select</span>
+             <span>Del: Delete</span>
+             <span>Ctrl+C: Copy All</span>
              <span>Ctrl+V: Paste</span>
          </div>
       </div>

@@ -244,11 +244,16 @@ const drawElement = (ctx: CanvasRenderingContext2D, el: DrawingElement) => {
   ctx.restore();
 };
 
-export const getMousePos = (canvas: HTMLCanvasElement, evt: React.MouseEvent | MouseEvent, scale: number): { x: number, y: number } => {
+export const getMousePos = (canvas: HTMLCanvasElement, evt: React.MouseEvent | MouseEvent): { x: number, y: number } => {
   const rect = canvas.getBoundingClientRect();
+  
+  // Calculate the scale between the actual CSS size (rect) and the internal canvas size
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+
   return {
-    x: (evt.clientX - rect.left) / scale,
-    y: (evt.clientY - rect.top) / scale
+    x: (evt.clientX - rect.left) * scaleX,
+    y: (evt.clientY - rect.top) * scaleY
   };
 };
 
