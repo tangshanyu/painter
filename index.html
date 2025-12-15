@@ -4,6 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>WebPicPick Local</title>
+    <!-- Keeping Tailwind CDN for simplicity to avoid extra config files for now, 
+         but technically a build step installation is better for production. 
+         This works fine for Vercel deployment though. -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
@@ -35,23 +38,21 @@
         scrollbar-width: none;
       }
     </style>
-  <!-- 注意：如果使用 Vite 打包部署，Import Map 可能會與 package.json 衝突，
-       但在沒有 node_modules 的純靜態環境下這有助於理解依賴。
-       Vercel 部署主要是靠下方的 script module 進入點。 -->
   <script type="importmap">
 {
   "imports": {
-    "lucide-react": "https://esm.sh/lucide-react@^0.561.0",
     "react/": "https://esm.sh/react@^19.2.3/",
     "react": "https://esm.sh/react@^19.2.3",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/"
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "lucide-react": "https://esm.sh/lucide-react@^0.561.0",
+    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2",
+    "vite": "https://esm.sh/vite@^7.2.7"
   }
 }
 </script>
 </head>
   <body class="bg-slate-100 text-slate-800 h-screen w-screen overflow-hidden selection:bg-brand-100">
     <div id="root"></div>
-    <!-- 這是修復 Vercel 部署的關鍵：明確指定進入點 -->
     <script type="module" src="/index.tsx"></script>
   </body>
 </html>
