@@ -1,0 +1,5 @@
+{
+  "name": "WebPicPick Local",
+  "description": "A purely local web-based clipboard and image editor featuring multi-tabs, highlighting, shapes, text, and direct clipboard integration.",
+  "requestFramePermissions": []
+}
