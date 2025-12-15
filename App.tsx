@@ -5,7 +5,7 @@ import Toolbar from './components/Toolbar';
 import Editor from './components/Editor';
 import { TabData, ToolType, ToolSettings, DrawingElement } from './types';
 import { DEFAULT_TOOL_SETTINGS } from './constants';
-import { blobToDataURL } from './utils/draw';
+import { blobToDataURL, renderCanvas } from './utils/draw';
 
 const DEFAULT_WIDTH = 800;
 const DEFAULT_HEIGHT = 600;
@@ -47,8 +47,9 @@ function App() {
 
   // --- Auto Fit Logic ---
   const calculateFitScale = (imgW: number, imgH: number) => {
-    const availableW = window.innerWidth - 64; // Padding
-    const availableH = window.innerHeight - 180; // Header + Footer space approx
+    // Adjusted for compact UI: Headers (~80px) + Footers (~30px)
+    const availableW = window.innerWidth - 48; 
+    const availableH = window.innerHeight - 110; 
     
     if (imgW <= 0 || imgH <= 0) return 1;
 
@@ -185,7 +186,7 @@ function App() {
                   imageDataUrl: dataUrl,
                   canvasWidth: img.width,
                   canvasHeight: img.height,
-                  title: 'Pasted Image',
+                  // title: 'Pasted Image', // Removed to preserve existing title
                   scale: autoScale
                 });
              } else {
@@ -347,6 +348,51 @@ function App() {
     }, 50);
   };
 
+  const handleSaveAll = async () => {
+    setSelectedElementId(null);
+    
+    // Process sequentially to allow browser download triggers
+    for (let i = 0; i < tabs.length; i++) {
+        const t = tabs[i];
+        
+        // Create an off-screen canvas
+        const canvas = document.createElement('canvas');
+        canvas.width = t.canvasWidth;
+        canvas.height = t.canvasHeight;
+        const ctx = canvas.getContext('2d');
+        
+        if (!ctx) continue;
+
+        // Ensure Background Image is loaded for rendering
+        let bgImg: HTMLImageElement | null = null;
+        if (t.imageDataUrl) {
+            await new Promise<void>((resolve) => {
+                const img = new Image();
+                img.onload = () => {
+                    bgImg = img;
+                    resolve();
+                };
+                img.onerror = () => resolve(); // proceed even if fail
+                img.src = t.imageDataUrl!;
+            });
+        }
+
+        // Render using shared draw logic (at 100% scale)
+        renderCanvas(canvas, ctx, bgImg, t.elements, null, null, 1);
+
+        // Download
+        const link = document.createElement('a');
+        link.download = `${t.title}.png`;
+        link.href = canvas.toDataURL('image/png');
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        // Small delay to prevent browser throttling multiple downloads
+        await new Promise(resolve => setTimeout(resolve, 300));
+    }
+  };
+
   const setScale = (newScale: number) => {
       updateTab(activeTabId, { scale: newScale });
   };
@@ -374,6 +420,7 @@ function App() {
         onDeleteSelected={handleDeleteSelected}
         onClearAll={handleClearAll}
         onSave={handleSave}
+        onSaveAll={handleSaveAll}
         onCopy={handleCopy}
       />
 
@@ -387,27 +434,27 @@ function App() {
         setSelectedElementId={setSelectedElementId}
       />
       
-      {/* Footer Info */}
-      <div className="bg-brand-50 border-t border-brand-100 px-4 py-1.5 text-xs text-brand-800 flex justify-between items-center select-none font-medium z-10">
-         <div className="flex gap-6 items-center">
-             <span className="bg-white px-2 py-0.5 rounded border border-brand-200 shadow-sm">{activeTab.canvasWidth} x {activeTab.canvasHeight} px</span>
+      {/* Footer Info - Compact Mode */}
+      <div className="bg-brand-50 border-t border-brand-100 px-3 py-1 text-xs text-brand-800 flex justify-between items-center select-none font-medium z-10 h-7">
+         <div className="flex gap-4 items-center">
+             <span className="opacity-80">{activeTab.canvasWidth} x {activeTab.canvasHeight} px</span>
          </div>
 
          {/* Zoom Controls */}
-         <div className="flex items-center gap-3">
+         <div className="flex items-center gap-2">
             <button 
                 onClick={() => setScale(calculateFitScale(activeTab.canvasWidth, activeTab.canvasHeight))}
-                className="p-1 hover:bg-brand-100 rounded text-brand-700"
+                className="p-0.5 hover:bg-brand-100 rounded text-brand-700"
                 title="Fit to Screen"
             >
-                <Maximize size={14} />
+                <Maximize size={12} />
             </button>
-            <div className="flex items-center gap-2 bg-white px-2 py-0.5 rounded border border-brand-200 shadow-sm">
+            <div className="flex items-center gap-1.5 bg-white px-1.5 py-0.5 rounded border border-brand-200 shadow-sm">
                 <button 
                     onClick={() => setScale(Math.max(0.1, activeTab.scale - 0.1))}
                     className="hover:text-brand-600"
                 >
-                    <Minus size={12} />
+                    <Minus size={10} />
                 </button>
                 
                 <input 
@@ -417,24 +464,24 @@ function App() {
                     step="0.05"
                     value={activeTab.scale}
                     onChange={(e) => setScale(parseFloat(e.target.value))}
-                    className="w-32 h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-brand-600"
+                    className="w-20 h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-brand-600"
                 />
 
                 <button 
                     onClick={() => setScale(Math.min(3.0, activeTab.scale + 0.1))}
                     className="hover:text-brand-600"
                 >
-                    <Plus size={12} />
+                    <Plus size={10} />
                 </button>
                 
-                <span className="w-10 text-right">{(activeTab.scale * 100).toFixed(0)}%</span>
+                <span className="w-8 text-right text-[10px]">{(activeTab.scale * 100).toFixed(0)}%</span>
             </div>
          </div>
 
-         <div className="flex gap-4 opacity-75 hidden sm:flex">
+         <div className="flex gap-3 opacity-75 hidden md:flex text-[10px]">
              <span>Esc: Select</span>
              <span>Del: Delete</span>
-             <span>Ctrl+C: Copy All</span>
+             <span>Ctrl+C: Copy</span>
              <span>Ctrl+V: Paste</span>
          </div>
       </div>
