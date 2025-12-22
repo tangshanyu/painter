@@ -238,40 +238,48 @@ function App() {
     const target = e.target as HTMLElement;
     if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
 
-    // Method 1: Standard Event Data
+    // Word Paste Quality Fix:
+    // Prioritize Async Clipboard API > DataTransfer Items
+    // Prioritize PNG > JPEG to avoid artifacts
+    
+    e.preventDefault(); // Prevent default immediately to handle manually
+
+    // Method 1: Async Clipboard API (Higher quality from system clipboard)
+    if (navigator.clipboard && navigator.clipboard.read) {
+        try {
+            const clipboardItems = await navigator.clipboard.read();
+            for (const item of clipboardItems) {
+                // Prioritize PNG
+                if (item.types.includes('image/png')) {
+                    const blob = await item.getType('image/png');
+                    processImageBlob(blob);
+                    return;
+                }
+                // Fallback to other images
+                const imageType = item.types.find(type => type.startsWith('image/'));
+                if (imageType) {
+                    const blob = await item.getType(imageType);
+                    processImageBlob(blob);
+                    return;
+                }
+            }
+        } catch (err) {
+            console.warn("Async clipboard read failed, falling back to event data", err);
+        }
+    }
+
+    // Method 2: Fallback to Event Data (Legacy / Restricted context)
     if (e.clipboardData && e.clipboardData.items) {
         const items = e.clipboardData.items;
         for (let i = 0; i < items.length; i++) {
             if (items[i].type.indexOf('image') !== -1) {
                 const blob = items[i].getAsFile();
                 if (blob) {
-                    e.preventDefault();
                     processImageBlob(blob);
                     return;
                 }
             }
         }
-    }
-
-    // Method 2: Fallback for mixed content (Word often needs this)
-    // The standard event might present text/html first or fail to expose the file object correctly in some contexts.
-    try {
-        if (navigator.clipboard && navigator.clipboard.read) {
-            const clipboardItems = await navigator.clipboard.read();
-            for (const item of clipboardItems) {
-                // Look specifically for image types
-                const imageType = item.types.find(type => type.startsWith('image/'));
-                if (imageType) {
-                    const blob = await item.getType(imageType);
-                    e.preventDefault();
-                    processImageBlob(blob);
-                    return;
-                }
-            }
-        }
-    } catch (err) {
-        // Permission denied or not supported, ignore
-        console.warn("Clipboard read failed", err);
     }
 
   }, [processImageBlob]);
@@ -403,15 +411,16 @@ function App() {
 
   const handleSaveAll = async () => {
     setSelectedElementId(null);
+    const dpr = window.devicePixelRatio || 1;
     
     // Process sequentially to allow browser download triggers
     for (let i = 0; i < tabs.length; i++) {
         const t = tabs[i];
         
-        // Create an off-screen canvas
+        // Create an off-screen canvas with High DPI
         const canvas = document.createElement('canvas');
-        canvas.width = t.canvasWidth;
-        canvas.height = t.canvasHeight;
+        canvas.width = t.canvasWidth * dpr;
+        canvas.height = t.canvasHeight * dpr;
         const ctx = canvas.getContext('2d');
         
         if (!ctx) continue;
@@ -430,8 +439,8 @@ function App() {
             });
         }
 
-        // Render using shared draw logic (at 100% scale)
-        renderCanvas(canvas, ctx, bgImg, t.elements, null, null, 1);
+        // Render using shared draw logic
+        renderCanvas(canvas, ctx, bgImg, t.elements, null, null, 1, dpr);
 
         // Download
         const link = document.createElement('a');

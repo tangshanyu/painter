@@ -93,10 +93,18 @@ const Editor: React.FC<EditorProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    canvas.width = tab.canvasWidth;
-    canvas.height = tab.canvasHeight;
+    // High DPI Support
+    const dpr = window.devicePixelRatio || 1;
+    
+    // Set internal (buffer) size to scale * DPR
+    canvas.width = tab.canvasWidth * dpr;
+    canvas.height = tab.canvasHeight * dpr;
+    
+    // Style (CSS) size remains logical pixels
+    // Note: We don't set style.width here because it's handled by the parent div's style and 'width: 100%' in CSS
+    // But we need to ensure the coordinate system in renderCanvas accounts for this.
 
-    renderCanvas(canvas, ctx, bgImage, tab.elements, currentElement, selectedElementId, tab.scale);
+    renderCanvas(canvas, ctx, bgImage, tab.elements, currentElement, selectedElementId, tab.scale, dpr);
   }, [tab.elements, tab.canvasWidth, tab.canvasHeight, bgImage, currentElement, selectedElementId, tab.scale]);
 
   // Commit Text Helper

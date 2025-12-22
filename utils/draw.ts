@@ -144,23 +144,39 @@ export const renderCanvas = (
   elements: DrawingElement[],
   activeElement: DrawingElement | null, // Currently drawing element
   selectedElementId: string | null,
-  scale: number = 1
+  scale: number = 1,
+  pixelRatio: number = 1 // New Argument for DPI support
 ) => {
-  // Clear canvas
+  // --- High DPI Setup ---
+  // Reset transform to identity before clearing
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  // Clear the full physical canvas
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  
+  // Apply DPI scaling
+  // All subsequent drawing commands will be in "logical" pixels, but rendered at high resolution
+  ctx.scale(pixelRatio, pixelRatio);
+
+  // Set Smoothing
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
 
   // Draw Background Image
   if (bgImage) {
     ctx.drawImage(bgImage, 0, 0);
   } else {
     // Placeholder background if no image
+    // Use logical width/height from canvas style (or calculated from physical / ratio)
+    const logicalW = canvas.width / pixelRatio;
+    const logicalH = canvas.height / pixelRatio;
+    
     ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillRect(0, 0, logicalW, logicalH);
     if (elements.length === 0 && !activeElement) {
         ctx.fillStyle = '#cbd5e1';
         ctx.font = '20px sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText('Paste an image (Ctrl+V) to start', canvas.width / 2, canvas.height / 2);
+        ctx.fillText('Paste an image (Ctrl+V) to start', logicalW / 2, logicalH / 2);
     }
   }
 
@@ -328,12 +344,35 @@ export const getMousePos = (canvas: HTMLCanvasElement, evt: React.MouseEvent | M
   const rect = canvas.getBoundingClientRect();
   
   // Calculate the scale between the actual CSS size (rect) and the internal canvas size
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
-
+  // NOTE: canvas.width is now the HIGH DPI width (e.g. 1600), rect.width is CSS width (e.g. 800)
+  // This existing logic actually still works because (1600 / 800) = 2, which matches the DPI scaling.
+  // We return logical coordinates for the app state, so we just need to be careful.
+  
+  // However, since we are scaling the Context by the pixel ratio in renderCanvas, 
+  // the draw functions expect Logical Coordinates.
+  // The mouse event gives CSS Screen Coordinates.
+  // We need to map CSS Screen -> Logical Canvas.
+  // CSS Width = rect.width. Logical Canvas Width = tab.canvasWidth.
+  // They SHOULD be identical usually, unless CSS is resizing it responsively.
+  
+  // The internal canvas.width is tab.canvasWidth * pixelRatio.
+  
+  const scaleX = canvas.width / rect.width; // e.g. 2
+  const scaleY = canvas.height / rect.height; // e.g. 2
+  
+  // We want to return logical coordinates. 
+  // If scaleX is 2 (Retina), it means 1 CSS pixel = 2 Canvas pixels.
+  // But our renderCanvas does ctx.scale(2, 2). So drawing at 100 draws at 200 physical.
+  // So we should return coordinates relative to the "Unscaled" logical size.
+  
+  // Simplest approach:
+  // The logic in Editor component relies on `tab.scale` (Zoom) separately.
+  // This helper returns coordinates relative to the DOM element size.
+  
+  // Let's rely on the fact that canvas style width matches the logical width.
   return {
-    x: (evt.clientX - rect.left) * scaleX,
-    y: (evt.clientY - rect.top) * scaleY
+    x: (evt.clientX - rect.left) * (canvas.width / rect.width) / (window.devicePixelRatio || 1),
+    y: (evt.clientY - rect.top) * (canvas.height / rect.height) / (window.devicePixelRatio || 1)
   };
 };
 
