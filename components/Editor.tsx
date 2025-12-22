@@ -367,17 +367,50 @@ const Editor: React.FC<EditorProps> = ({
         let oy = originalEl.y || 0;
         let ow = originalEl.width || 0;
         let oh = originalEl.height || 0;
+        
+        // --- Aspect Ratio Logic ---
+        // Requirement: Corners (NW, NE, SW, SE) maintain ratio. Sides (N, S, E, W) do not.
+        const shouldMaintainRatio = originalEl.type === 'image' && ['nw', 'ne', 'sw', 'se'].includes(handle || '');
+        const aspectRatio = (ow !== 0 && oh !== 0) ? Math.abs(ow / oh) : 1;
 
-        // Apply changes based on handle
-        if (handle.includes('e')) newEl.width = ow + dx;
-        if (handle.includes('s')) newEl.height = oh + dy;
-        if (handle.includes('w')) {
-            newEl.x = ox + dx;
-            newEl.width = ow - dx;
-        }
-        if (handle.includes('n')) {
-            newEl.y = oy + dy;
-            newEl.height = oh - dy;
+        if (shouldMaintainRatio) {
+            // Corner Resizing with Ratio
+            let newW = ow;
+            let newH = oh;
+
+            // Simplified: Use the dominant change to drive the other
+            if (handle === 'se') {
+                newW = ow + dx;
+                newH = newW / aspectRatio;
+            } else if (handle === 'sw') {
+                newW = ow - dx;
+                newH = newW / aspectRatio;
+                newEl.x = ox + dx;
+            } else if (handle === 'ne') {
+                newW = ow + dx;
+                newH = newW / aspectRatio;
+                newEl.y = oy + (oh - newH); // Shift y up/down to match new height
+            } else if (handle === 'nw') {
+                newW = ow - dx;
+                newH = newW / aspectRatio;
+                newEl.x = ox + dx;
+                newEl.y = oy + (oh - newH);
+            }
+            
+            newEl.width = newW;
+            newEl.height = newH;
+        } else {
+            // Free Resizing (Standard 8-way logic)
+            if (handle && handle.includes('e')) newEl.width = ow + dx;
+            if (handle && handle.includes('s')) newEl.height = oh + dy;
+            if (handle && handle.includes('w')) {
+                newEl.x = ox + dx;
+                newEl.width = ow - dx;
+            }
+            if (handle && handle.includes('n')) {
+                newEl.y = oy + dy;
+                newEl.height = oh - dy;
+            }
         }
 
         const updatedElements = tab.elements.map(el => el.id === originalEl.id ? newEl : el);

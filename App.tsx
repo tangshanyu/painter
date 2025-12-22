@@ -191,64 +191,90 @@ function App() {
 
   // --- Clipboard Integration ---
 
+  const processImageBlob = useCallback(async (blob: Blob) => {
+      const dataUrl = await blobToDataURL(blob);
+      const img = new Image();
+      img.src = dataUrl;
+      img.onload = () => {
+          // 1. If empty tab, set as background
+          if (!activeTab.imageDataUrl && activeTab.elements.length === 0) {
+              const autoScale = calculateFitScale(img.width, img.height);
+              updateTab(activeTabId, {
+                  imageDataUrl: dataUrl,
+                  canvasWidth: img.width,
+                  canvasHeight: img.height,
+                  scale: autoScale
+              });
+          } else {
+              // 2. Paste as Layer
+              setActiveTool('select');
+              const newElement: DrawingElement = {
+                  id: Date.now().toString(),
+                  type: 'image',
+                  imageData: dataUrl,
+                  x: 20, 
+                  y: 20,
+                  width: img.width,
+                  height: img.height,
+                  color: '#000',
+                  strokeWidth: 0
+              };
+              
+              const newElements = [...activeTab.elements, newElement];
+              const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
+              newHistory.push(newElements);
+              
+              updateTab(activeTabId, {
+                  elements: newElements,
+                  history: newHistory,
+                  historyIndex: newHistory.length - 1
+              });
+              setSelectedElementId(newElement.id);
+          }
+      };
+  }, [activeTab, activeTabId, updateTab, calculateFitScale, setSelectedElementId]);
+
   const handlePaste = useCallback(async (e: ClipboardEvent) => {
     const target = e.target as HTMLElement;
     if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
 
-    const items = e.clipboardData?.items;
-    if (!items) return;
-
-    for (let i = 0; i < items.length; i++) {
-      if (items[i].type.indexOf('image') !== -1) {
-        const blob = items[i].getAsFile();
-        if (blob) {
-           const dataUrl = await blobToDataURL(blob);
-           const img = new Image();
-           img.src = dataUrl;
-           img.onload = () => {
-             // 1. If empty tab, set as background
-             if (!activeTab.imageDataUrl && activeTab.elements.length === 0) {
-                const autoScale = calculateFitScale(img.width, img.height);
-                updateTab(activeTabId, {
-                  imageDataUrl: dataUrl,
-                  canvasWidth: img.width,
-                  canvasHeight: img.height,
-                  // title: 'Pasted Image', // Removed to preserve existing title
-                  scale: autoScale
-                });
-             } else {
-                // 2. Paste as Layer
-                setActiveTool('select');
-                const newElement: DrawingElement = {
-                    id: Date.now().toString(),
-                    type: 'image',
-                    imageData: dataUrl,
-                    x: 20, 
-                    y: 20,
-                    width: img.width,
-                    height: img.height,
-                    color: '#000',
-                    strokeWidth: 0
-                };
-                
-                const newElements = [...activeTab.elements, newElement];
-                const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
-                newHistory.push(newElements);
-                
-                updateTab(activeTabId, {
-                    elements: newElements,
-                    history: newHistory,
-                    historyIndex: newHistory.length - 1
-                });
-                setSelectedElementId(newElement.id);
-             }
-           };
+    // Method 1: Standard Event Data
+    if (e.clipboardData && e.clipboardData.items) {
+        const items = e.clipboardData.items;
+        for (let i = 0; i < items.length; i++) {
+            if (items[i].type.indexOf('image') !== -1) {
+                const blob = items[i].getAsFile();
+                if (blob) {
+                    e.preventDefault();
+                    processImageBlob(blob);
+                    return;
+                }
+            }
         }
-        e.preventDefault();
-        break;
-      }
     }
-  }, [activeTab, activeTabId, updateTab, tabs]);
+
+    // Method 2: Fallback for mixed content (Word often needs this)
+    // The standard event might present text/html first or fail to expose the file object correctly in some contexts.
+    try {
+        if (navigator.clipboard && navigator.clipboard.read) {
+            const clipboardItems = await navigator.clipboard.read();
+            for (const item of clipboardItems) {
+                // Look specifically for image types
+                const imageType = item.types.find(type => type.startsWith('image/'));
+                if (imageType) {
+                    const blob = await item.getType(imageType);
+                    e.preventDefault();
+                    processImageBlob(blob);
+                    return;
+                }
+            }
+        }
+    } catch (err) {
+        // Permission denied or not supported, ignore
+        console.warn("Clipboard read failed", err);
+    }
+
+  }, [processImageBlob]);
 
   useEffect(() => {
     window.addEventListener('paste', handlePaste);
@@ -475,14 +501,14 @@ function App() {
                 type="number" 
                 value={activeTab.canvasWidth} 
                 onChange={(e) => updateTab(activeTabId, { canvasWidth: parseInt(e.target.value) || 100 })}
-                className="w-16 bg-transparent text-right hover:bg-white/50 dark:hover:bg-slate-700 focus:bg-white dark:focus:bg-slate-700 focus:outline-none rounded px-0.5"
+                className="w-[3.5rem] bg-transparent text-right hover:bg-white/50 dark:hover:bg-slate-700 focus:bg-white dark:focus:bg-slate-700 focus:outline-none rounded px-0.5"
              />
              <span className="opacity-80">x</span>
              <input 
                 type="number" 
                 value={activeTab.canvasHeight} 
                 onChange={(e) => updateTab(activeTabId, { canvasHeight: parseInt(e.target.value) || 100 })}
-                className="w-16 bg-transparent text-left hover:bg-white/50 dark:hover:bg-slate-700 focus:bg-white dark:focus:bg-slate-700 focus:outline-none rounded px-0.5"
+                className="w-[3.5rem] bg-transparent text-left hover:bg-white/50 dark:hover:bg-slate-700 focus:bg-white dark:focus:bg-slate-700 focus:outline-none rounded px-0.5"
              />
              <span className="opacity-80 ml-1">px</span>
          </div>
