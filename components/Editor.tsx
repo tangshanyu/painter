@@ -38,11 +38,19 @@ const Editor: React.FC<EditorProps> = ({
   const [isDrawing, setIsDrawing] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   
-  // Resize State
-  const [resizeState, setResizeState] = useState<{
+  // Element Resize State
+  const [elementResizeState, setElementResizeState] = useState<{
     handle: ResizeHandleType;
     startPos: Point;
     originalEl: DrawingElement;
+  } | null>(null);
+  
+  // Canvas Resize State
+  const [canvasResizeState, setCanvasResizeState] = useState<{
+      handle: 'n' | 's' | 'e' | 'w' | 'nw' | 'ne' | 'sw' | 'se';
+      startScreenPos: Point; // Screen coordinates (clientX/Y)
+      startWidth: number;
+      startHeight: number;
   } | null>(null);
 
   const [dragStartPos, setDragStartPos] = useState<Point | null>(null);
@@ -169,7 +177,7 @@ const Editor: React.FC<EditorProps> = ({
         if (selectedEl) {
             const handle = getResizeHandleType(pos.x, pos.y, selectedEl);
             if (handle) {
-                setResizeState({
+                setElementResizeState({
                     handle,
                     startPos: pos,
                     originalEl: { ...selectedEl }
@@ -258,11 +266,80 @@ const Editor: React.FC<EditorProps> = ({
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
+    // --- Canvas Resize Logic (Independent of canvas ref) ---
+    if (canvasResizeState) {
+        const { handle, startScreenPos, startWidth, startHeight } = canvasResizeState;
+        // Divide by scale because mouse movement on screen covers more "canvas pixels" if zoomed out
+        const dx = (e.clientX - startScreenPos.x) / tab.scale; 
+        const dy = (e.clientY - startScreenPos.y) / tab.scale;
+
+        let potentialW = startWidth;
+        let potentialH = startHeight;
+        
+        // Update Width based on direction
+        if (handle.includes('e')) potentialW = startWidth + dx;
+        if (handle.includes('w')) potentialW = startWidth - dx;
+
+        // Update Height based on direction
+        if (handle.includes('s')) potentialH = startHeight + dy;
+        if (handle.includes('n')) potentialH = startHeight - dy;
+
+        // Clamp values
+        const newW = Math.max(10, potentialW);
+        const newH = Math.max(10, potentialH);
+
+        // Calculate Shifts (for North and West)
+        let wDiff = 0;
+        let hDiff = 0;
+        
+        // If we are resizing from the West (Left), the "virtual" origin moves, so we shift elements Right
+        if (handle.includes('w')) {
+            wDiff = newW - startWidth;
+        }
+
+        // If we are resizing from the North (Top), the "virtual" origin moves, so we shift elements Down
+        if (handle.includes('n')) {
+            hDiff = newH - startHeight;
+        }
+
+        // Apply Updates
+        if (Math.round(wDiff) !== 0 || Math.round(hDiff) !== 0) {
+            const updatedElements = tab.elements.map(el => {
+                const copy = { ...el };
+                if (copy.x !== undefined) copy.x += wDiff;
+                if (copy.y !== undefined) copy.y += hDiff;
+                if (copy.points) copy.points = copy.points.map(p => ({ x: p.x + wDiff, y: p.y + hDiff }));
+                return copy;
+            });
+            
+            updateTab(tab.id, { 
+                canvasWidth: Math.round(newW), 
+                canvasHeight: Math.round(newH),
+                elements: updatedElements 
+            });
+            
+            // Update start state to prevent compounding drift in continuous drag
+            setCanvasResizeState({
+                ...canvasResizeState,
+                startScreenPos: { x: e.clientX, y: e.clientY },
+                startWidth: newW,
+                startHeight: newH
+            });
+        } else {
+            // No shifting needed, just size update
+            updateTab(tab.id, { 
+                canvasWidth: Math.round(newW), 
+                canvasHeight: Math.round(newH) 
+            });
+        }
+        return;
+    }
+
     if (!canvasRef.current) return;
     const pos = getMousePos(canvasRef.current, e);
 
     // --- CURSOR UPDATES ---
-    if (!isDrawing && !isDragging && !resizeState) {
+    if (!isDrawing && !isDragging && !elementResizeState) {
         // Check hover over handles
         if (selectedElementId) {
             const selectedEl = tab.elements.find(el => el.id === selectedElementId);
@@ -279,9 +356,9 @@ const Editor: React.FC<EditorProps> = ({
         }
     }
 
-    // --- RESIZING (8-Way) ---
-    if (resizeState) {
-        const { handle, startPos, originalEl } = resizeState;
+    // --- RESIZING ELEMENTS (8-Way) ---
+    if (elementResizeState) {
+        const { handle, startPos, originalEl } = elementResizeState;
         const dx = pos.x - startPos.x;
         const dy = pos.y - startPos.y;
         
@@ -354,9 +431,15 @@ const Editor: React.FC<EditorProps> = ({
   };
 
   const handleMouseUp = () => {
+    // Finish Canvas Resize
+    if (canvasResizeState) {
+        setCanvasResizeState(null);
+        return;
+    }
+
     // Finish Resize or Drag
-    if (resizeState) {
-        setResizeState(null);
+    if (elementResizeState) {
+        setElementResizeState(null);
         // Save history
         const newHistory = tab.history.slice(0, tab.historyIndex + 1);
         newHistory.push(tab.elements);
@@ -426,10 +509,27 @@ const Editor: React.FC<EditorProps> = ({
     setSelectedElementId(finalElement.id); // Auto-select created element
   };
 
+  // Canvas Resize Handlers
+  const handleCanvasResizeStart = (e: React.MouseEvent, handle: 'n' | 's' | 'e' | 'w' | 'nw' | 'ne' | 'sw' | 'se') => {
+      e.preventDefault();
+      e.stopPropagation();
+      setCanvasResizeState({
+          handle,
+          startScreenPos: { x: e.clientX, y: e.clientY },
+          startWidth: tab.canvasWidth,
+          startHeight: tab.canvasHeight
+      });
+  };
+
   return (
     <div 
       ref={containerRef} 
       className="flex-1 bg-slate-200 dark:bg-slate-950 overflow-auto flex items-center justify-center p-8 relative transition-colors"
+      onMouseMove={(e) => {
+          // Allow resizing even if mouse leaves the handle/canvas area
+          if (canvasResizeState) handleMouseMove(e);
+      }}
+      onMouseUp={handleMouseUp}
       onDragOver={(e) => e.preventDefault()}
     >
       <div 
@@ -457,6 +557,28 @@ const Editor: React.FC<EditorProps> = ({
           className="block"
         />
 
+        {/* Canvas Resize Handles (8 directions) */}
+        {/* Corners */}
+        <div className="absolute top-0 left-0 w-3 h-3 -translate-x-1/2 -translate-y-1/2 bg-white border border-slate-400 cursor-nwse-resize z-20 hover:scale-125 transition-transform"
+             onMouseDown={(e) => handleCanvasResizeStart(e, 'nw')}></div>
+        <div className="absolute top-0 right-0 w-3 h-3 translate-x-1/2 -translate-y-1/2 bg-white border border-slate-400 cursor-nesw-resize z-20 hover:scale-125 transition-transform"
+             onMouseDown={(e) => handleCanvasResizeStart(e, 'ne')}></div>
+        <div className="absolute bottom-0 left-0 w-3 h-3 -translate-x-1/2 translate-y-1/2 bg-white border border-slate-400 cursor-nesw-resize z-20 hover:scale-125 transition-transform"
+             onMouseDown={(e) => handleCanvasResizeStart(e, 'sw')}></div>
+        <div className="absolute bottom-0 right-0 w-3 h-3 translate-x-1/2 translate-y-1/2 bg-white border border-slate-400 cursor-nwse-resize z-20 hover:scale-125 transition-transform"
+             onMouseDown={(e) => handleCanvasResizeStart(e, 'se')}></div>
+        
+        {/* Edges */}
+        <div className="absolute top-0 left-1/2 w-3 h-3 -translate-x-1/2 -translate-y-1/2 bg-white border border-slate-400 cursor-ns-resize z-20 hover:scale-125 transition-transform"
+             onMouseDown={(e) => handleCanvasResizeStart(e, 'n')}></div>
+        <div className="absolute bottom-0 left-1/2 w-3 h-3 -translate-x-1/2 translate-y-1/2 bg-white border border-slate-400 cursor-ns-resize z-20 hover:scale-125 transition-transform"
+             onMouseDown={(e) => handleCanvasResizeStart(e, 's')}></div>
+        <div className="absolute top-1/2 left-0 w-3 h-3 -translate-x-1/2 -translate-y-1/2 bg-white border border-slate-400 cursor-ew-resize z-20 hover:scale-125 transition-transform"
+             onMouseDown={(e) => handleCanvasResizeStart(e, 'w')}></div>
+        <div className="absolute top-1/2 right-0 w-3 h-3 translate-x-1/2 -translate-y-1/2 bg-white border border-slate-400 cursor-ew-resize z-20 hover:scale-125 transition-transform"
+             onMouseDown={(e) => handleCanvasResizeStart(e, 'e')}></div>
+
+
         {textInput && textInput.visible && (
           <textarea
             autoFocus
@@ -465,8 +587,7 @@ const Editor: React.FC<EditorProps> = ({
             onBlur={commitText}
             onKeyDown={(e) => {
                if (e.key === 'Enter' && !e.shiftKey) {
-                 e.preventDefault();
-                 commitText();
+                 // Allow normal enter for newlines in textarea
                }
                if (e.key === 'Escape') setTextInput(null);
             }}

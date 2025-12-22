@@ -429,7 +429,7 @@ function App() {
       <TabList 
         tabs={tabs} 
         activeTabId={activeTabId} 
-        onSwitch={(id) => { setActiveTabId(id); setSelectedElementId(null); }} 
+        onSwitch={(id) => { setActiveTabId(id); setSelectedElementId(null); setStampCounter(1); }} 
         onClose={closeTab}
         onAdd={() => createNewTab()}
         onRename={handleRenameTab}
@@ -475,14 +475,14 @@ function App() {
                 type="number" 
                 value={activeTab.canvasWidth} 
                 onChange={(e) => updateTab(activeTabId, { canvasWidth: parseInt(e.target.value) || 100 })}
-                className="w-10 bg-transparent text-right hover:bg-white/50 dark:hover:bg-slate-700 focus:bg-white dark:focus:bg-slate-700 focus:outline-none rounded px-0.5"
+                className="w-16 bg-transparent text-right hover:bg-white/50 dark:hover:bg-slate-700 focus:bg-white dark:focus:bg-slate-700 focus:outline-none rounded px-0.5"
              />
              <span className="opacity-80">x</span>
              <input 
                 type="number" 
                 value={activeTab.canvasHeight} 
                 onChange={(e) => updateTab(activeTabId, { canvasHeight: parseInt(e.target.value) || 100 })}
-                className="w-10 bg-transparent text-left hover:bg-white/50 dark:hover:bg-slate-700 focus:bg-white dark:focus:bg-slate-700 focus:outline-none rounded px-0.5"
+                className="w-16 bg-transparent text-left hover:bg-white/50 dark:hover:bg-slate-700 focus:bg-white dark:focus:bg-slate-700 focus:outline-none rounded px-0.5"
              />
              <span className="opacity-80 ml-1">px</span>
          </div>

@@ -16,30 +16,43 @@ const getImage = (src: string): HTMLImageElement | null => {
   return null; // Return null on first render, it will re-render when React state updates or next frame
 };
 
-// Helper function to wrap text
+// Helper function to wrap text with newline support
 const wrapText = (ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, lineHeight: number) => {
-    const words = text.split(' ');
-    let line = '';
-    let testLine = '';
-    let testWidth = 0;
+    const paragraphs = text.split('\n');
     let currentY = y;
 
-    // If box is too small, just draw what fits or let it overflow slightly
-    if (maxWidth < 20) maxWidth = 20;
+    // Minimum width clamp
+    const effectiveWidth = Math.max(20, maxWidth);
 
-    for(let n = 0; n < words.length; n++) {
-        testLine = line + words[n] + ' ';
-        const metrics = ctx.measureText(testLine);
-        testWidth = metrics.width;
-        if (testWidth > maxWidth && n > 0) {
-            ctx.fillText(line, x, currentY);
-            line = words[n] + ' ';
+    paragraphs.forEach(paragraph => {
+        const words = paragraph.split(' ');
+        let line = '';
+        let testLine = '';
+        let testWidth = 0;
+
+        // If paragraph is empty (double newline), just skip a line
+        if (paragraph.length === 0) {
             currentY += lineHeight;
-        } else {
-            line = testLine;
+            return;
         }
-    }
-    ctx.fillText(line, x, currentY);
+
+        for(let n = 0; n < words.length; n++) {
+            testLine = line + words[n] + ' ';
+            const metrics = ctx.measureText(testLine);
+            testWidth = metrics.width;
+            
+            // If explicit width is set (maxWidth > 0) AND we exceed it
+            if (maxWidth > 0 && testWidth > effectiveWidth && n > 0) {
+                ctx.fillText(line, x, currentY);
+                line = words[n] + ' ';
+                currentY += lineHeight;
+            } else {
+                line = testLine;
+            }
+        }
+        ctx.fillText(line, x, currentY);
+        currentY += lineHeight;
+    });
 };
 
 // Helper to draw an arrow
@@ -294,11 +307,10 @@ const drawElement = (ctx: CanvasRenderingContext2D, el: DrawingElement) => {
        const fontSize = el.strokeWidth * 6;
        ctx.font = `${fontSize}px sans-serif`; 
        ctx.textBaseline = 'top'; 
-       if (el.width) {
-           wrapText(ctx, el.text, el.x, el.y, el.width, fontSize * 1.2);
-       } else {
-           ctx.fillText(el.text, el.x, el.y);
-       }
+       // Support multi-line drawing with wrapText
+       // If width is undefined or 0, we treat it as infinite width but still respect newlines
+       // wrapText now handles newlines automatically
+       wrapText(ctx, el.text, el.x, el.y, el.width || 0, fontSize * 1.2);
      }
   } else if (el.type === 'image' && el.imageData) {
      const img = getImage(el.imageData);
