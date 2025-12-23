@@ -1,5 +1,5 @@
 
-export type ToolType = 'select' | 'pen' | 'highlighter' | 'rect' | 'arrow' | 'text' | 'stamp' | 'pixelate' | 'crop';
+export type ToolType = 'select' | 'pen' | 'highlighter' | 'rect' | 'circle' | 'triangle' | 'diamond' | 'line' | 'arrow' | 'text' | 'stamp' | 'pixelate' | 'crop' | 'eraser';
 
 export interface Point {
   x: number;
@@ -7,21 +7,27 @@ export interface Point {
 }
 
 export type ArrowStyle = 'filled' | 'outline';
+export type StampStyle = 'circle' | 'square';
+export type PixelateStyle = 'pixel' | 'blur';
+export type HighlighterStyle = 'brush' | 'rect';
 
 export interface DrawingElement {
   id: string;
   type: ToolType | 'image'; // Added 'image' as a type for layers
-  points?: Point[]; // For pen/highlighter
-  x?: number; // For rect/text/image/arrow
-  y?: number; // For rect/text/image/arrow
-  width?: number; // For rect/image/arrow (as vector x)
-  height?: number; // For rect/image/arrow (as vector y)
+  points?: Point[]; // For pen/highlighter (brush mode)
+  x?: number; // For rect/text/image/arrow/stamp/highlighter(rect)
+  y?: number; // For rect/text/image/arrow/stamp/highlighter(rect)
+  width?: number; // For rect/image/arrow
+  height?: number; // For rect/image/arrow
   text?: string; // For text and STAMP (holds the number)
   imageData?: string; // Base64 for image layer
   color: string;
   strokeWidth: number;
   font?: string;
   arrowStyle?: ArrowStyle;
+  stampStyle?: StampStyle;
+  pixelateStyle?: PixelateStyle;
+  highlighterStyle?: HighlighterStyle;
   rotation?: number; // Rotation in radians
   locked?: boolean; // if true, cannot be moved or resized
 }
@@ -44,4 +50,7 @@ export interface ToolSettings {
   fontSize: number;
   opacity: number;
   arrowStyle: ArrowStyle;
+  stampStyle: StampStyle;
+  pixelateStyle: PixelateStyle;
+  highlighterStyle: HighlighterStyle;
 }

@@ -1,5 +1,5 @@
 import React from 'react';
-import { DrawingElement, Point, ArrowStyle } from '../types';
+import { DrawingElement, Point, ArrowStyle, StampStyle } from '../types';
 import { HIGHLIGHTER_OPACITY } from '../constants';
 
 // Helper to load images for the canvas renderer
@@ -52,10 +52,12 @@ const wrapText = (ctx: CanvasRenderingContext2D, text: string, x: number, y: num
 };
 
 const drawArrow = (ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, strokeWidth: number, style: ArrowStyle = 'filled') => {
-    const startX = 0;
-    const startY = 0;
-    const endX = w;
-    const endY = h;
+    // Start from x, y
+    const startX = x;
+    const startY = y;
+    // End at x+w, y+h
+    const endX = x + w;
+    const endY = y + h;
 
     const dx = endX - startX;
     const dy = endY - startY;
@@ -113,10 +115,16 @@ const drawArrow = (ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
     }
 };
 
-const drawStamp = (ctx: CanvasRenderingContext2D, x: number, y: number, text: string, color: string, strokeWidth: number) => {
+const drawStamp = (ctx: CanvasRenderingContext2D, x: number, y: number, text: string, color: string, strokeWidth: number, style: StampStyle = 'circle') => {
     const radius = 10 + strokeWidth; 
     ctx.beginPath();
-    ctx.arc(0, 0, radius, 0, 2 * Math.PI);
+    
+    if (style === 'square') {
+         ctx.rect(x - radius, y - radius, radius * 2, radius * 2);
+    } else {
+         ctx.arc(x, y, radius, 0, 2 * Math.PI);
+    }
+    
     ctx.fillStyle = color;
     ctx.fill();
     ctx.strokeStyle = '#ffffff';
@@ -127,7 +135,7 @@ const drawStamp = (ctx: CanvasRenderingContext2D, x: number, y: number, text: st
     ctx.font = `bold ${radius * 1.2}px sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(text, 0, radius * 0.1); 
+    ctx.fillText(text, x, y + radius * 0.1); 
 };
 
 // Apply Pixelation to a region
@@ -199,6 +207,58 @@ const applyPixelate = (ctx: CanvasRenderingContext2D, width: number, height: num
         // Fallback or ignore
     }
 }
+
+// Apply Blur to a region
+const applyBlur = (ctx: CanvasRenderingContext2D, width: number, height: number, blurAmount: number = 8) => {
+    try {
+         const transform = ctx.getTransform();
+        
+        // Start point in device coords
+        const startX = transform.e;
+        const startY = transform.f;
+        
+        // Dimensions in device coords
+        const w = width * transform.a; 
+        const h = height * transform.d;
+
+        // Calculate actual screen rectangle (normalized)
+        let rx = startX;
+        let ry = startY;
+        let rw = w;
+        let rh = h;
+
+        if (rw < 0) {
+            rx += rw;
+            rw = -rw;
+        }
+        if (rh < 0) {
+            ry += rh;
+            rh = -rh;
+        }
+
+        if (rw < 1 || rh < 1) return;
+
+        const offCanvas = document.createElement('canvas');
+        offCanvas.width = rw;
+        offCanvas.height = rh;
+        const offCtx = offCanvas.getContext('2d');
+        if (!offCtx) return;
+
+        // Copy current region
+        offCtx.drawImage(ctx.canvas, rx, ry, rw, rh, 0, 0, rw, rh);
+        
+        // Draw back with blur
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0); // Reset transform to draw in absolute coords
+        ctx.filter = `blur(${blurAmount}px)`;
+        ctx.drawImage(offCanvas, rx, ry);
+        ctx.filter = 'none';
+        ctx.restore();
+
+    } catch (e) {
+        // Ignore
+    }
+};
 
 export const renderCanvas = (
   canvas: HTMLCanvasElement,
@@ -301,7 +361,7 @@ const drawSelectionBorder = (ctx: CanvasRenderingContext2D, el: DrawingElement) 
   let w = el.width || 0;
   let h = el.height || 0;
 
-  if (el.type === 'pen' || el.type === 'highlighter') {
+  if (el.type === 'pen' || (el.type === 'highlighter' && (!el.highlighterStyle || el.highlighterStyle === 'brush'))) {
       if (el.points) {
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         el.points.forEach(p => { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); });
@@ -320,47 +380,51 @@ const drawSelectionBorder = (ctx: CanvasRenderingContext2D, el: DrawingElement) 
   // Draw border
   ctx.strokeRect(drawX - padding, drawY - padding, drawW + padding * 2, drawH + padding * 2);
   
-  if (!el.locked && ['rect', 'image', 'text', 'arrow', 'pixelate'].includes(el.type)) {
-      ctx.setLineDash([]);
-      ctx.fillStyle = '#ffffff';
-      ctx.strokeStyle = '#3b82f6';
-      
-      const handleSize = 8;
-      const half = handleSize / 2;
+  if (!el.locked && ['rect', 'image', 'text', 'arrow', 'pixelate', 'circle', 'triangle', 'diamond', 'line', 'highlighter'].includes(el.type)) {
+      if (el.type === 'highlighter' && (!el.highlighterStyle || el.highlighterStyle === 'brush')) {
+          // No handles for brush highlighter
+      } else {
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#ffffff';
+        ctx.strokeStyle = '#3b82f6';
+        
+        const handleSize = 8;
+        const half = handleSize / 2;
 
-      const left = drawX - padding;
-      const right = drawX + drawW + padding;
-      const top = drawY - padding;
-      const bottom = drawY + drawH + padding;
-      const midX = drawX + drawW / 2;
-      const midY = drawY + drawH / 2;
+        const left = drawX - padding;
+        const right = drawX + drawW + padding;
+        const top = drawY - padding;
+        const bottom = drawY + drawH + padding;
+        const midX = drawX + drawW / 2;
+        const midY = drawY + drawH / 2;
 
-      // Resize Handles
-      const handles = [
-          { x: left, y: top }, { x: midX, y: top }, { x: right, y: top },
-          { x: right, y: midY }, { x: right, y: bottom }, { x: midX, y: bottom },
-          { x: left, y: bottom }, { x: left, y: midY },
-      ];
+        // Resize Handles
+        const handles = [
+            { x: left, y: top }, { x: midX, y: top }, { x: right, y: top },
+            { x: right, y: midY }, { x: right, y: bottom }, { x: midX, y: bottom },
+            { x: left, y: bottom }, { x: left, y: midY },
+        ];
 
-      handles.forEach(hPos => {
-          ctx.fillRect(hPos.x - half, hPos.y - half, handleSize, handleSize);
-          ctx.strokeRect(hPos.x - half, hPos.y - half, handleSize, handleSize);
-      });
+        handles.forEach(hPos => {
+            ctx.fillRect(hPos.x - half, hPos.y - half, handleSize, handleSize);
+            ctx.strokeRect(hPos.x - half, hPos.y - half, handleSize, handleSize);
+        });
 
-      // Rotation Handle (Top Center, sticking out)
-      const rotDist = 20;
-      const rotX = midX;
-      const rotY = top - rotDist;
-      
-      ctx.beginPath();
-      ctx.moveTo(midX, top);
-      ctx.lineTo(rotX, rotY);
-      ctx.stroke();
-      
-      ctx.beginPath();
-      ctx.arc(rotX, rotY, 5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
+        // Rotation Handle (Top Center, sticking out)
+        const rotDist = 20;
+        const rotX = midX;
+        const rotY = top - rotDist;
+        
+        ctx.beginPath();
+        ctx.moveTo(midX, top);
+        ctx.lineTo(rotX, rotY);
+        ctx.stroke();
+        
+        ctx.beginPath();
+        ctx.arc(rotX, rotY, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
   }
 
   ctx.restore();
@@ -369,10 +433,25 @@ const drawSelectionBorder = (ctx: CanvasRenderingContext2D, el: DrawingElement) 
 const drawElement = (ctx: CanvasRenderingContext2D, el: DrawingElement) => {
   ctx.save();
   
+  if (el.type === 'eraser') {
+      ctx.fillStyle = 'rgba(255, 0, 0, 0.1)';
+      ctx.strokeStyle = '#ef4444';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([5, 5]);
+      ctx.fillRect(el.x || 0, el.y || 0, el.width || 0, el.height || 0);
+      ctx.strokeRect(el.x || 0, el.y || 0, el.width || 0, el.height || 0);
+      ctx.restore();
+      return;
+  }
+
   if (el.type === 'pixelate') {
        if (!el.rotation) {
            ctx.translate(el.x || 0, el.y || 0);
-           applyPixelate(ctx, el.width || 0, el.height || 0, 10);
+           if (el.pixelateStyle === 'blur') {
+               applyBlur(ctx, el.width || 0, el.height || 0);
+           } else {
+               applyPixelate(ctx, el.width || 0, el.height || 0, 10);
+           }
            ctx.restore();
            return;
        }
@@ -385,15 +464,27 @@ const drawElement = (ctx: CanvasRenderingContext2D, el: DrawingElement) => {
        ctx.restore();
        return;
   }
+  
+  if (el.type === 'stamp') {
+      // Stamp draws at specific x,y, no width/height logic usually
+      if (el.x !== undefined && el.y !== undefined && el.text) {
+          drawStamp(ctx, el.x, el.y, el.text, el.color, el.strokeWidth, el.stampStyle);
+      }
+      ctx.restore();
+      return;
+  }
 
   // Common Transformations
   const cx = (el.x || 0) + (el.width || 0) / 2;
   const cy = (el.y || 0) + (el.height || 0) / 2;
 
-  if (['rect', 'image', 'text', 'arrow', 'stamp'].includes(el.type)) {
-      ctx.translate(cx, cy);
-      if (el.rotation) ctx.rotate(el.rotation);
-      ctx.translate(-cx, -cy);
+  if (['rect', 'image', 'text', 'arrow', 'circle', 'triangle', 'diamond', 'line', 'highlighter'].includes(el.type)) {
+      // For highlighter rect mode, we treat it like a shape
+      if (el.type !== 'highlighter' || el.highlighterStyle === 'rect') {
+        ctx.translate(cx, cy);
+        if (el.rotation) ctx.rotate(el.rotation);
+        ctx.translate(-cx, -cy);
+      }
   }
 
   ctx.beginPath();
@@ -410,7 +501,12 @@ const drawElement = (ctx: CanvasRenderingContext2D, el: DrawingElement) => {
     ctx.lineWidth = el.strokeWidth * 3; 
   }
 
-  if (el.type === 'pen' || el.type === 'highlighter') {
+  const x = el.x || 0;
+  const y = el.y || 0;
+  const w = el.width || 0;
+  const h = el.height || 0;
+
+  if (el.type === 'pen' || (el.type === 'highlighter' && (!el.highlighterStyle || el.highlighterStyle === 'brush'))) {
     if (el.points && el.points.length > 0) {
       ctx.moveTo(el.points[0].x, el.points[0].y);
       for (let i = 1; i < el.points.length; i++) {
@@ -418,14 +514,37 @@ const drawElement = (ctx: CanvasRenderingContext2D, el: DrawingElement) => {
       }
       ctx.stroke();
     }
+  } else if (el.type === 'highlighter' && el.highlighterStyle === 'rect') {
+      ctx.globalAlpha = HIGHLIGHTER_OPACITY;
+      ctx.fillRect(x, y, w, h);
   } else if (el.type === 'rect') {
-      ctx.strokeRect(el.x || 0, el.y || 0, el.width || 0, el.height || 0);
+      ctx.strokeRect(x, y, w, h);
+  } else if (el.type === 'circle') {
+      ctx.beginPath();
+      ctx.ellipse(x + w/2, y + h/2, Math.abs(w)/2, Math.abs(h)/2, 0, 0, 2 * Math.PI);
+      ctx.stroke();
+  } else if (el.type === 'triangle') {
+      ctx.beginPath();
+      ctx.moveTo(x + w / 2, y);
+      ctx.lineTo(x, y + h);
+      ctx.lineTo(x + w, y + h);
+      ctx.closePath();
+      ctx.stroke();
+  } else if (el.type === 'diamond') {
+      ctx.beginPath();
+      ctx.moveTo(x + w / 2, y);
+      ctx.lineTo(x + w, y + h / 2);
+      ctx.lineTo(x + w / 2, y + h);
+      ctx.lineTo(x, y + h / 2);
+      ctx.closePath();
+      ctx.stroke();
+  } else if (el.type === 'line') {
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + w, y + h);
+      ctx.stroke();
   } else if (el.type === 'arrow') {
-      drawArrow(ctx, el.x || 0, el.y || 0, el.width || 0, el.height || 0, el.strokeWidth, el.arrowStyle || 'filled');
-  } else if (el.type === 'stamp') {
-      if (el.x !== undefined && el.y !== undefined && el.text) {
-          drawStamp(ctx, el.x, el.y, el.text, el.color, el.strokeWidth);
-      }
+      drawArrow(ctx, x, y, w, h, el.strokeWidth, el.arrowStyle || 'filled');
   } else if (el.type === 'text') {
      if (el.x !== undefined && el.y !== undefined && el.text) {
        const fontSize = el.strokeWidth * 6;
@@ -473,36 +592,110 @@ export const isPointInElement = (x: number, y: number, el: DrawingElement, ctx: 
     if (bh < 0) { by += bh; bh = Math.abs(bh); }
 
     // If rotated, rotate the test point AROUND the element center in REVERSE
-    if (el.rotation && el.rotation !== 0 && ['rect', 'image', 'text', 'arrow', 'pixelate'].includes(el.type)) {
-        const cx = bx + bw / 2;
-        const cy = by + bh / 2;
-        
-        // Translate point to origin relative to center
-        const dx = x - cx;
-        const dy = y - cy;
-        
-        // Rotate backwards
-        const cos = Math.cos(-el.rotation);
-        const sin = Math.sin(-el.rotation);
-        
-        const rx = dx * cos - dy * sin;
-        const ry = dx * sin + dy * cos;
-        
-        // Translate back
-        x = rx + cx;
-        y = ry + cy;
+    if (el.rotation && el.rotation !== 0 && ['rect', 'image', 'text', 'arrow', 'pixelate', 'circle', 'triangle', 'diamond', 'line', 'highlighter'].includes(el.type)) {
+         if (el.type === 'highlighter' && (!el.highlighterStyle || el.highlighterStyle === 'brush')) {
+             // Brush highlighter no rotation support yet
+         } else {
+            const cx = bx + bw / 2;
+            const cy = by + bh / 2;
+            const dx = x - cx;
+            const dy = y - cy;
+            const cos = Math.cos(-el.rotation);
+            const sin = Math.sin(-el.rotation);
+            const rx = dx * cos - dy * sin;
+            const ry = dx * sin + dy * cos;
+            x = rx + cx;
+            y = ry + cy;
+         }
     }
 
     if (el.type === 'rect' || el.type === 'image' || el.type === 'text' || el.type === 'arrow' || el.type === 'pixelate') {
         const padding = 5;
         return x >= bx - padding && x <= bx + bw + padding && y >= by - padding && y <= by + bh + padding;
     }
+    else if (el.type === 'highlighter' && el.highlighterStyle === 'rect') {
+        const padding = 5;
+        return x >= bx - padding && x <= bx + bw + padding && y >= by - padding && y <= by + bh + padding;
+    }
+    // Circle detection
+    else if (el.type === 'circle') {
+        const cx = bx + bw / 2;
+        const cy = by + bh / 2;
+        const rx = bw / 2;
+        const ry = bh / 2;
+        const padding = 5;
+        const dx = x - cx;
+        const dy = y - cy;
+        return ((dx*dx)/((rx+padding)*(rx+padding)) + (dy*dy)/((ry+padding)*(ry+padding))) <= 1;
+    }
+    // Line detection
+    else if (el.type === 'line') {
+        const padding = Math.max(5, el.strokeWidth);
+        const x1 = el.x || 0;
+        const y1 = el.y || 0;
+        const x2 = x1 + (el.width || 0);
+        const y2 = y1 + (el.height || 0);
+        
+        const A = x - x1;
+        const B = y - y1;
+        const C = x2 - x1;
+        const D = y2 - y1;
+
+        const dot = A * C + B * D;
+        const lenSq = C * C + D * D;
+        let param = -1;
+        if (lenSq !== 0) param = dot / lenSq;
+
+        let xx, yy;
+
+        if (param < 0) {
+            xx = x1;
+            yy = y1;
+        } else if (param > 1) {
+            xx = x2;
+            yy = y2;
+        } else {
+            xx = x1 + param * C;
+            yy = y1 + param * D;
+        }
+
+        const ddx = x - xx;
+        const ddy = y - yy;
+        return (ddx * ddx + ddy * ddy) <= padding * padding;
+    }
+    // Triangle & Diamond detection
+    else if (el.type === 'triangle' || el.type === 'diamond') {
+         const path = new Path2D();
+         const ox = el.x || 0;
+         const oy = el.y || 0;
+         const ow = el.width || 0;
+         const oh = el.height || 0;
+
+         if (el.type === 'triangle') {
+             path.moveTo(ox + ow / 2, oy);
+             path.lineTo(ox, oy + oh);
+             path.lineTo(ox + ow, oy + oh);
+             path.closePath();
+         } else {
+             path.moveTo(ox + ow / 2, oy);
+             path.lineTo(ox + ow, oy + oh / 2);
+             path.lineTo(ox + ow / 2, oy + oh);
+             path.lineTo(ox, oy + oh / 2);
+             path.closePath();
+         }
+         ctx.lineWidth = Math.max(10, el.strokeWidth + 5);
+         return ctx.isPointInPath(path, x, y) || ctx.isPointInStroke(path, x, y);
+    }
     else if (el.type === 'stamp') {
         if (el.x !== undefined && el.y !== undefined) {
             const radius = 10 + el.strokeWidth;
-            const dx = x - el.x;
-            const dy = y - el.y;
-            return dx*dx + dy*dy <= radius*radius;
+            if (el.stampStyle === 'square') {
+                return x >= el.x - radius && x <= el.x + radius && y >= el.y - radius && y <= el.y + radius;
+            } else {
+                const dx = x - el.x;
+                const dy = y - el.y;
+                return dx*dx + dy*dy <= radius*radius;
+            }
         }
         return false;
     }
@@ -518,12 +711,40 @@ export const isPointInElement = (x: number, y: number, el: DrawingElement, ctx: 
     return false;
 };
 
+// Return simple bounding box for an element {x, y, w, h}
+export const getElementBounds = (el: DrawingElement) => {
+    let bx = el.x || 0;
+    let by = el.y || 0;
+    let bw = el.width || 0;
+    let bh = el.height || 0;
+
+    if (el.type === 'pen' || (el.type === 'highlighter' && (!el.highlighterStyle || el.highlighterStyle === 'brush'))) {
+        if (!el.points || el.points.length === 0) return { x: 0, y: 0, w: 0, h: 0 };
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        el.points.forEach(p => { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); });
+        return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+    }
+    
+    if (el.type === 'stamp') {
+        const radius = 10 + el.strokeWidth;
+        return { x: bx - radius, y: by - radius, w: radius * 2, h: radius * 2 };
+    }
+
+    if (bw < 0) { bx += bw; bw = Math.abs(bw); }
+    if (bh < 0) { by += bh; bh = Math.abs(bh); }
+
+    return { x: bx, y: by, w: bw, h: bh };
+};
+
 // Check which resize handle is hit
 export type ResizeHandleType = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'rotate' | null;
 
 export const getResizeHandleType = (x: number, y: number, el: DrawingElement): ResizeHandleType => {
     if (el.locked) return null;
-    if (!['rect', 'text', 'image', 'arrow', 'pixelate'].includes(el.type)) return null;
+    // Highlight Brush has no handles
+    if (el.type === 'highlighter' && (!el.highlighterStyle || el.highlighterStyle === 'brush')) return null;
+
+    if (!['rect', 'text', 'image', 'arrow', 'pixelate', 'circle', 'triangle', 'diamond', 'line', 'highlighter'].includes(el.type)) return null;
     
     const handleSize = 12; 
     const half = handleSize / 2;

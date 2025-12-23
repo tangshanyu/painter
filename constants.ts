@@ -1,3 +1,4 @@
+
 import { ToolSettings } from './types';
 
 export const DEFAULT_TOOL_SETTINGS: ToolSettings = {
@@ -6,6 +7,9 @@ export const DEFAULT_TOOL_SETTINGS: ToolSettings = {
   fontSize: 24,
   opacity: 1,
   arrowStyle: 'filled',
+  stampStyle: 'circle',
+  pixelateStyle: 'pixel',
+  highlighterStyle: 'brush',
 };
 
 export const HIGHLIGHTER_OPACITY = 0.4;

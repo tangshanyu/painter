@@ -6,7 +6,8 @@ import {
   isPointInElement, 
   getResizeHandleType, 
   ResizeHandleType,
-  getCursorForHandle
+  getCursorForHandle,
+  getElementBounds
 } from '../utils/draw';
 
 interface EditorProps {
@@ -207,6 +208,7 @@ const Editor: React.FC<EditorProps> = ({
             height: 0,
             color: toolSettings.color,
             strokeWidth: toolSettings.strokeWidth,
+            stampStyle: toolSettings.stampStyle,
             text: stampCounter.toString()
         };
         const newElements = [...tab.elements, newElement];
@@ -233,18 +235,25 @@ const Editor: React.FC<EditorProps> = ({
         return;
     }
 
+    // Determine if we should use point-based drawing (pen) or box-based drawing (rect/shapes)
+    const isFreehand = activeTool === 'pen' || (activeTool === 'highlighter' && toolSettings.highlighterStyle === 'brush');
+    
     const newId = Date.now().toString();
     const startElement: DrawingElement = {
       id: newId,
       type: activeTool,
       color: toolSettings.color,
       strokeWidth: toolSettings.strokeWidth,
-      points: (activeTool === 'pen' || activeTool === 'highlighter') ? [pos] : undefined,
-      x: (activeTool === 'rect' || activeTool === 'arrow' || activeTool === 'crop' || activeTool === 'pixelate') ? pos.x : undefined,
-      y: (activeTool === 'rect' || activeTool === 'arrow' || activeTool === 'crop' || activeTool === 'pixelate') ? pos.y : undefined,
+      // Attributes for shapes
+      pixelateStyle: activeTool === 'pixelate' ? toolSettings.pixelateStyle : undefined,
+      highlighterStyle: activeTool === 'highlighter' ? toolSettings.highlighterStyle : undefined,
+      arrowStyle: activeTool === 'arrow' ? toolSettings.arrowStyle : undefined,
+      
+      points: isFreehand ? [pos] : undefined,
+      x: !isFreehand ? pos.x : undefined,
+      y: !isFreehand ? pos.y : undefined,
       width: 0,
       height: 0,
-      arrowStyle: activeTool === 'arrow' ? toolSettings.arrowStyle : undefined,
     };
     setCurrentElement(startElement);
   };
@@ -329,23 +338,9 @@ const Editor: React.FC<EditorProps> = ({
              const cx = (originalEl.x || 0) + (originalEl.width || 0) / 2;
              const cy = (originalEl.y || 0) + (originalEl.height || 0) / 2;
              
-             // Initial angle of handle was -90deg (Top)
-             // Angle from center to current mouse
              const currentAngle = Math.atan2(pos.y - cy, pos.x - cx);
-             
-             // Snap to 45 deg increments if Shift key? (Optional enhancement)
-             // Default handle is at -PI/2.
-             // We want rotation relative to that.
-             // But actually, just setting rotation to `currentAngle + PI/2` works if we consider 0 rotation = Up
-             // But standard 0 rotation = Right.
-             // Our drawing logic: 0 rotation means normal upright.
-             // So if mouse is at Right (0 deg), rotation should be 90 deg? 
-             // If mouse is at Top (-90 deg), rotation should be 0.
-             // So rotation = currentAngle - (-PI/2) = currentAngle + PI/2.
-             
              let newRotation = currentAngle + Math.PI / 2;
              
-             // Update
              const updatedElements = tab.elements.map(el => el.id === originalEl.id ? { ...el, rotation: newRotation } : el);
              updateTab(tab.id, { elements: updatedElements });
              return;
@@ -405,10 +400,15 @@ const Editor: React.FC<EditorProps> = ({
       const updatedElements = tab.elements.map(el => {
         if (el.id !== selectedElementId) return el;
         const newEl = { ...el };
-        if (['rect', 'image', 'text', 'arrow', 'stamp', 'pixelate'].includes(newEl.type)) {
-          newEl.x = (el.x || 0) + dx;
-          newEl.y = (el.y || 0) + dy;
-        } else if ((newEl.type === 'pen' || newEl.type === 'highlighter') && newEl.points) {
+        if (['rect', 'image', 'text', 'arrow', 'stamp', 'pixelate', 'circle', 'triangle', 'diamond', 'line', 'highlighter'].includes(newEl.type)) {
+            // Special check for highlighter brush mode, which moves by points
+            if (newEl.type === 'highlighter' && (!newEl.highlighterStyle || newEl.highlighterStyle === 'brush')) {
+                 if (newEl.points) newEl.points = newEl.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
+            } else {
+                 newEl.x = (el.x || 0) + dx;
+                 newEl.y = (el.y || 0) + dy;
+            }
+        } else if (newEl.type === 'pen' && newEl.points) {
           newEl.points = newEl.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
         }
         return newEl;
@@ -420,7 +420,7 @@ const Editor: React.FC<EditorProps> = ({
 
     if (!isDrawing || !currentElement || !dragStartPos) return;
 
-    if (activeTool === 'pen' || activeTool === 'highlighter') {
+    if (activeTool === 'pen' || (activeTool === 'highlighter' && toolSettings.highlighterStyle === 'brush')) {
       let nextPoint = pos;
       if (activeTool === 'highlighter' && e.shiftKey) {
           nextPoint = { x: pos.x, y: dragStartPos.y };
@@ -428,7 +428,8 @@ const Editor: React.FC<EditorProps> = ({
       const newPoints = [...(currentElement.points || []), nextPoint];
       setCurrentElement({ ...currentElement, points: newPoints });
 
-    } else if (activeTool === 'rect' || activeTool === 'text' || activeTool === 'arrow' || activeTool === 'crop' || activeTool === 'pixelate') {
+    } else {
+      // Box based tools
       const w = pos.x - dragStartPos.x;
       const h = pos.y - dragStartPos.y;
       setCurrentElement({ 
@@ -484,6 +485,43 @@ const Editor: React.FC<EditorProps> = ({
         return;
     }
 
+    // ERASER BOX TOOL LOGIC
+    if (activeTool === 'eraser') {
+        const w = currentElement.width || 0;
+        const h = currentElement.height || 0;
+        const x = currentElement.x || 0;
+        const y = currentElement.y || 0;
+
+        // Normalize Eraser Rect
+        let ex = w < 0 ? x + w : x;
+        let ey = h < 0 ? y + h : y;
+        let ew = Math.abs(w);
+        let eh = Math.abs(h);
+
+        // Filter out intersecting elements
+        const remainingElements = tab.elements.filter(el => {
+             if (el.locked) return true;
+             const b = getElementBounds(el);
+             // Simple AABB Intersection
+             const intersect = !(
+                 b.x > ex + ew || 
+                 b.x + b.w < ex || 
+                 b.y > ey + eh || 
+                 b.y + b.h < ey
+             );
+             return !intersect;
+        });
+
+        if (remainingElements.length !== tab.elements.length) {
+            const newHistory = tab.history.slice(0, tab.historyIndex + 1);
+            newHistory.push(remainingElements);
+            updateTab(tab.id, { elements: remainingElements, history: newHistory, historyIndex: newHistory.length - 1 });
+        }
+        
+        setCurrentElement(null);
+        return;
+    }
+
     if (activeTool === 'text') {
         const w = currentElement.width || 0;
         const h = currentElement.height || 0;
@@ -507,17 +545,25 @@ const Editor: React.FC<EditorProps> = ({
         return;
     }
     
-    if ((currentElement.type === 'rect' || currentElement.type === 'arrow') && (Math.abs(currentElement.width || 0) < 5 || Math.abs(currentElement.height || 0) < 5)) {
+    // Cull small geometric shapes (except brush highlighter/pen)
+    const isBoxTool = ['rect', 'arrow', 'circle', 'triangle', 'diamond', 'line'].includes(activeTool);
+    const isHighlighterRect = activeTool === 'highlighter' && toolSettings.highlighterStyle === 'rect';
+    
+    if ((isBoxTool || isHighlighterRect) && (Math.abs(currentElement.width || 0) < 5 || Math.abs(currentElement.height || 0) < 5)) {
         setCurrentElement(null);
         return;
     }
 
     let finalElement = { ...currentElement };
-    if (['rect', 'pixelate'].includes(finalElement.type as string)) {
+    // Normalize negative dimensions for basic shapes (makes resize logic easier later)
+    if (['rect', 'pixelate', 'circle', 'triangle', 'diamond', 'line', 'highlighter'].includes(finalElement.type as string)) {
         const w = finalElement.width || 0;
         const h = finalElement.height || 0;
-        if (w < 0) { finalElement.x = (finalElement.x || 0) + w; finalElement.width = Math.abs(w); }
-        if (h < 0) { finalElement.y = (finalElement.y || 0) + h; finalElement.height = Math.abs(h); }
+        // Skip normalizing for Line or Highlighter Brush
+        if (finalElement.type !== 'line' && (finalElement.type !== 'highlighter' || finalElement.highlighterStyle === 'rect')) {
+             if (w < 0) { finalElement.x = (finalElement.x || 0) + w; finalElement.width = Math.abs(w); }
+             if (h < 0) { finalElement.y = (finalElement.y || 0) + h; finalElement.height = Math.abs(h); }
+        }
     }
 
     const newElements = [...tab.elements, finalElement];
@@ -527,7 +573,8 @@ const Editor: React.FC<EditorProps> = ({
     setCurrentElement(null);
     setSelectedElementId(finalElement.id); 
   };
-
+  
+  // ... handleCanvasResizeStart and render ...
   const handleCanvasResizeStart = (e: React.MouseEvent, handle: 'n' | 's' | 'e' | 'w' | 'nw' | 'ne' | 'sw' | 'se') => {
       e.preventDefault();
       e.stopPropagation();
@@ -572,7 +619,8 @@ const Editor: React.FC<EditorProps> = ({
           }}
           className="block"
         />
-
+        
+        {/* Resize Handles - Keeping existing ones */}
         <div className="absolute top-0 left-0 w-3 h-3 -translate-x-1/2 -translate-y-1/2 bg-white border border-slate-400 cursor-nwse-resize z-20 hover:scale-125 transition-transform"
              onMouseDown={(e) => handleCanvasResizeStart(e, 'nw')}></div>
         <div className="absolute top-0 right-0 w-3 h-3 translate-x-1/2 -translate-y-1/2 bg-white border border-slate-400 cursor-nesw-resize z-20 hover:scale-125 transition-transform"
