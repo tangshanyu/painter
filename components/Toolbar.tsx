@@ -17,9 +17,17 @@ import {
   Moon,
   Sun,
   Triangle,
-  Stamp
+  Stamp,
+  Lock,
+  Unlock,
+  Crop,
+  Grid3X3,
+  BringToFront,
+  SendToBack,
+  ChevronUp,
+  ChevronDown
 } from 'lucide-react';
-import { ToolType, ToolSettings } from '../types';
+import { ToolType, ToolSettings, DrawingElement } from '../types';
 import { COLORS } from '../constants';
 
 interface ToolbarProps {
@@ -30,6 +38,7 @@ interface ToolbarProps {
   canUndo: boolean;
   canRedo: boolean;
   hasSelection: boolean;
+  selectedElement?: DrawingElement; 
   onUndo: () => void;
   onRedo: () => void;
   onSave: () => void;
@@ -37,6 +46,8 @@ interface ToolbarProps {
   onCopy: () => void;
   onDeleteSelected: () => void;
   onClearAll: () => void;
+  onToggleLock: () => void;
+  onLayerOrder: (action: 'front' | 'back' | 'forward' | 'backward') => void;
   darkMode: boolean;
   toggleDarkMode: () => void;
   stampCounter: number;
@@ -51,6 +62,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
   canUndo,
   canRedo,
   hasSelection,
+  selectedElement,
   onUndo,
   onRedo,
   onSave,
@@ -58,6 +70,8 @@ const Toolbar: React.FC<ToolbarProps> = ({
   onCopy,
   onDeleteSelected,
   onClearAll,
+  onToggleLock,
+  onLayerOrder,
   darkMode,
   toggleDarkMode,
   stampCounter,
@@ -66,6 +80,8 @@ const Toolbar: React.FC<ToolbarProps> = ({
   
   const tools = [
     { id: 'select', icon: MousePointer2, label: 'Select' }, 
+    { id: 'crop', icon: Crop, label: 'Crop Tool (Drag to crop)' },
+    { id: 'pixelate', icon: Grid3X3, label: 'Mosaic' }, 
     { id: 'pen', icon: Pen, label: 'Pen' },
     { id: 'highlighter', icon: Highlighter, label: 'Highlighter' },
     { id: 'rect', icon: Square, label: 'Rectangle' },
@@ -74,10 +90,8 @@ const Toolbar: React.FC<ToolbarProps> = ({
     { id: 'text', icon: Type, label: 'Text' },
   ] as const;
 
-  // Define dot sizes for drawing tools
   const DOT_SIZES = [2, 4, 8, 12, 20];
   
-  // Define text sizes (px)
   const TEXT_SIZES = [
       { label: '12px', value: 2 },
       { label: '18px', value: 3 },
@@ -95,7 +109,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
         {tools.map((t) => (
           <button
             key={t.id}
-            onClick={() => setTool(t.id)}
+            onClick={() => setTool(t.id as ToolType)}
             title={t.label}
             className={`p-1.5 rounded-md transition-all flex items-center justify-center ${
               currentTool === t.id 
@@ -134,10 +148,9 @@ const Toolbar: React.FC<ToolbarProps> = ({
 
       <div className="w-px h-6 bg-slate-300 dark:bg-slate-600 mx-1"></div>
 
-      {/* Size Control - Logic Split */}
+      {/* Size Control */}
       <div className="flex items-center gap-1.5 min-w-[120px]">
         {currentTool === 'text' ? (
-            // Text Tool: Dropdown with PX
             <div className="flex items-center gap-1">
                 <Type size={14} className="text-slate-400" />
                 <select 
@@ -151,7 +164,6 @@ const Toolbar: React.FC<ToolbarProps> = ({
                 </select>
             </div>
         ) : (
-            // Drawing Tools: Dots
             <div className="flex items-center gap-1 bg-slate-50 dark:bg-slate-700 p-1 rounded border border-slate-100 dark:border-slate-600">
                 {DOT_SIZES.map((size) => (
                     <button
@@ -173,7 +185,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
         )}
       </div>
 
-      {/* Stamp Counter - Only when Stamp is selected */}
+      {/* Contextual Tools */}
       {currentTool === 'stamp' && (
         <>
             <div className="w-px h-6 bg-slate-300 dark:bg-slate-600 mx-1"></div>
@@ -189,7 +201,6 @@ const Toolbar: React.FC<ToolbarProps> = ({
         </>
       )}
 
-      {/* Arrow Style Toggle - Only when Arrow tool is selected */}
       {currentTool === 'arrow' && (
         <>
             <div className="w-px h-6 bg-slate-300 dark:bg-slate-600 mx-1"></div>
@@ -220,17 +231,27 @@ const Toolbar: React.FC<ToolbarProps> = ({
         </>
       )}
 
-      {/* Helper Text for Highlighter */}
-      {currentTool === 'highlighter' && (
-        <div className="hidden md:flex items-center gap-1.5 text-xs text-brand-600 dark:text-brand-300 bg-brand-50 dark:bg-brand-900/30 px-2 py-0.5 rounded border border-brand-100 dark:border-brand-800 ml-1">
-          <Info size={12} />
-          <span>Shift: H-Line</span>
-        </div>
-      )}
-
       <div className="flex-grow"></div>
 
-      {/* Actions */}
+      {/* Layer Actions */}
+      {hasSelection && (
+         <div className="flex items-center gap-0.5 bg-slate-100 dark:bg-slate-700 p-0.5 rounded mr-2">
+            <button onClick={() => onLayerOrder('front')} className="p-1 hover:bg-white dark:hover:bg-slate-600 rounded text-slate-600 dark:text-slate-300" title="Bring to Front">
+                <BringToFront size={14} />
+            </button>
+             <button onClick={() => onLayerOrder('forward')} className="p-1 hover:bg-white dark:hover:bg-slate-600 rounded text-slate-600 dark:text-slate-300" title="Bring Forward">
+                <ChevronUp size={14} />
+            </button>
+            <button onClick={() => onLayerOrder('backward')} className="p-1 hover:bg-white dark:hover:bg-slate-600 rounded text-slate-600 dark:text-slate-300" title="Send Backward">
+                <ChevronDown size={14} />
+            </button>
+            <button onClick={() => onLayerOrder('back')} className="p-1 hover:bg-white dark:hover:bg-slate-600 rounded text-slate-600 dark:text-slate-300" title="Send to Back">
+                <SendToBack size={14} />
+            </button>
+         </div>
+      )}
+
+      {/* General Actions */}
       <div className="flex gap-1 items-center">
          <button 
           onClick={onUndo} disabled={!canUndo}
@@ -248,6 +269,18 @@ const Toolbar: React.FC<ToolbarProps> = ({
         </button>
         
         <div className="w-px h-6 bg-slate-300 dark:bg-slate-600 mx-1"></div>
+        
+        <button 
+          onClick={onToggleLock} disabled={!hasSelection}
+          className={`p-1.5 rounded disabled:opacity-30 disabled:hover:bg-transparent transition-colors ${
+              selectedElement?.locked 
+              ? 'text-red-500 bg-red-50 dark:bg-red-900/20' 
+              : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+          }`}
+          title={selectedElement?.locked ? "Unlock Position" : "Lock Position"}
+        >
+          {selectedElement?.locked ? <Lock size={16} /> : <Unlock size={16} />}
+        </button>
 
         <button 
           onClick={onDeleteSelected} disabled={!hasSelection}
@@ -270,7 +303,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
         <button 
           onClick={onCopy}
           className="flex items-center gap-1.5 px-2 py-1 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 rounded font-medium text-xs transition-colors h-7"
-          title="Copy to Clipboard"
+          title="Copy (Ctrl+C)"
         >
           <Copy size={14} />
           <span className="hidden sm:inline">Copy</span>
@@ -294,7 +327,6 @@ const Toolbar: React.FC<ToolbarProps> = ({
 
         <div className="w-px h-6 bg-slate-300 dark:bg-slate-600 mx-1"></div>
 
-        {/* Dark Mode Toggle */}
         <button
           onClick={toggleDarkMode}
           className="p-1.5 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded transition-colors"

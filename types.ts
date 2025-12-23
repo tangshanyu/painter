@@ -1,5 +1,5 @@
 
-export type ToolType = 'select' | 'pen' | 'highlighter' | 'rect' | 'arrow' | 'text' | 'stamp';
+export type ToolType = 'select' | 'pen' | 'highlighter' | 'rect' | 'arrow' | 'text' | 'stamp' | 'pixelate' | 'crop';
 
 export interface Point {
   x: number;
@@ -21,7 +21,9 @@ export interface DrawingElement {
   color: string;
   strokeWidth: number;
   font?: string;
-  arrowStyle?: ArrowStyle; // New property
+  arrowStyle?: ArrowStyle;
+  rotation?: number; // Rotation in radians
+  locked?: boolean; // if true, cannot be moved or resized
 }
 
 export interface TabData {

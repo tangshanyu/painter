@@ -20,8 +20,6 @@ const getImage = (src: string): HTMLImageElement | null => {
 const wrapText = (ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, lineHeight: number) => {
     const paragraphs = text.split('\n');
     let currentY = y;
-
-    // Minimum width clamp
     const effectiveWidth = Math.max(20, maxWidth);
 
     paragraphs.forEach(paragraph => {
@@ -30,7 +28,6 @@ const wrapText = (ctx: CanvasRenderingContext2D, text: string, x: number, y: num
         let testLine = '';
         let testWidth = 0;
 
-        // If paragraph is empty (double newline), just skip a line
         if (paragraph.length === 0) {
             currentY += lineHeight;
             return;
@@ -41,7 +38,6 @@ const wrapText = (ctx: CanvasRenderingContext2D, text: string, x: number, y: num
             const metrics = ctx.measureText(testLine);
             testWidth = metrics.width;
             
-            // If explicit width is set (maxWidth > 0) AND we exceed it
             if (maxWidth > 0 && testWidth > effectiveWidth && n > 0) {
                 ctx.fillText(line, x, currentY);
                 line = words[n] + ' ';
@@ -55,75 +51,72 @@ const wrapText = (ctx: CanvasRenderingContext2D, text: string, x: number, y: num
     });
 };
 
-// Helper to draw an arrow
-const drawArrow = (
-    ctx: CanvasRenderingContext2D, 
-    x: number, 
-    y: number, 
-    w: number, 
-    h: number, 
-    strokeWidth: number,
-    style: ArrowStyle = 'filled'
-) => {
-    const headLength = 15 + strokeWidth * 2; 
-    const startX = x;
-    const startY = y;
-    const endX = x + w;
-    const endY = y + h;
-    
-    const angle = Math.atan2(endY - startY, endX - startX);
-    
-    // Draw Shaft (Line)
-    // We stop the line a bit before the end so it doesn't poke through the hollow head
-    const lineEndOffset = style === 'outline' ? headLength * 0.8 : 0;
-    const lineEndX = endX - lineEndOffset * Math.cos(angle);
-    const lineEndY = endY - lineEndOffset * Math.sin(angle);
+const drawArrow = (ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, strokeWidth: number, style: ArrowStyle = 'filled') => {
+    const startX = 0;
+    const startY = 0;
+    const endX = w;
+    const endY = h;
+
+    const dx = endX - startX;
+    const dy = endY - startY;
+    const angle = Math.atan2(dy, dx);
+    const length = Math.sqrt(dx * dx + dy * dy);
+
+    const headLength = Math.max(strokeWidth * 3.5, 10); 
+    const headWidth = Math.max(strokeWidth * 2.5, 8); 
+
+    const safeLength = Math.max(length, 1);
+    const scale = length < headLength ? safeLength / headLength : 1;
+    const actualHeadLength = headLength * scale;
 
     ctx.beginPath();
-    ctx.moveTo(startX, startY);
-    ctx.lineTo(lineEndX, lineEndY);
-    ctx.stroke();
-
-    // Draw Arrow Head
-    ctx.beginPath();
-    // Tip
-    ctx.moveTo(endX, endY);
-    // Left corner
-    ctx.lineTo(endX - headLength * Math.cos(angle - Math.PI / 6), endY - headLength * Math.sin(angle - Math.PI / 6));
-    // Back center (indent) - optional, let's keep it simple triangle for consistency
-    // ctx.lineTo(endX - headLength * 0.6 * Math.cos(angle), endY - headLength * 0.6 * Math.sin(angle));
-    // Right corner
-    ctx.lineTo(endX - headLength * Math.cos(angle + Math.PI / 6), endY - headLength * Math.sin(angle + Math.PI / 6));
-    
-    ctx.closePath(); // Close the triangle
 
     if (style === 'filled') {
+        const lineEndDist = length - actualHeadLength * 0.9; 
+        const lineEndX = startX + Math.cos(angle) * lineEndDist;
+        const lineEndY = startY + Math.sin(angle) * lineEndDist;
+
+        ctx.moveTo(startX, startY);
+        ctx.lineTo(lineEndX, lineEndY);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(endX, endY);
+        ctx.lineTo(
+            endX - actualHeadLength * Math.cos(angle - Math.PI / 7),
+            endY - actualHeadLength * Math.sin(angle - Math.PI / 7)
+        );
+        ctx.lineTo(
+            endX - actualHeadLength * Math.cos(angle + Math.PI / 7),
+            endY - actualHeadLength * Math.sin(angle + Math.PI / 7)
+        );
+        ctx.closePath();
+        ctx.fillStyle = ctx.strokeStyle;
         ctx.fill();
     } else {
-        // Outline
-        ctx.fillStyle = 'transparent'; // Or we could clear content? No, transparent is better for overlay
-        // To prevent the line from showing inside the head if we didn't offset it correctly, 
-        // we can fill with white/background? But that's hard to know.
-        // We rely on lineEndOffset above to stop the line short.
-        ctx.lineWidth = strokeWidth; // Ensure stroke width matches
+        ctx.moveTo(startX, startY);
+        ctx.lineTo(endX, endY);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(endX, endY);
+        ctx.lineTo(
+            endX - actualHeadLength * Math.cos(angle - Math.PI / 6),
+            endY - actualHeadLength * Math.sin(angle - Math.PI / 6)
+        );
+        ctx.moveTo(endX, endY);
+        ctx.lineTo(
+            endX - actualHeadLength * Math.cos(angle + Math.PI / 6),
+            endY - actualHeadLength * Math.sin(angle + Math.PI / 6)
+        );
         ctx.stroke();
     }
 };
 
-const drawStamp = (
-    ctx: CanvasRenderingContext2D,
-    x: number,
-    y: number,
-    text: string,
-    color: string,
-    strokeWidth: number
-) => {
-    // Radius based on strokeWidth (reused size logic)
-    // small dot (2) -> r=10, large dot (20) -> r=30
+const drawStamp = (ctx: CanvasRenderingContext2D, x: number, y: number, text: string, color: string, strokeWidth: number) => {
     const radius = 10 + strokeWidth; 
-    
     ctx.beginPath();
-    ctx.arc(x, y, radius, 0, 2 * Math.PI);
+    ctx.arc(0, 0, radius, 0, 2 * Math.PI);
     ctx.fillStyle = color;
     ctx.fill();
     ctx.strokeStyle = '#ffffff';
@@ -134,42 +127,103 @@ const drawStamp = (
     ctx.font = `bold ${radius * 1.2}px sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(text, x, y + radius * 0.1); // slight offset for visual center
+    ctx.fillText(text, 0, radius * 0.1); 
 };
+
+// Apply Pixelation to a region
+const applyPixelate = (ctx: CanvasRenderingContext2D, width: number, height: number, pixelSize: number = 10) => {
+    try {
+        const transform = ctx.getTransform();
+        
+        // Start point in device coords (which corresponds to (0,0) in local space)
+        const startX = transform.e;
+        const startY = transform.f;
+        
+        // Dimensions in device coords
+        const w = width * transform.a; 
+        const h = height * transform.d;
+
+        // Calculate actual screen rectangle (normalized)
+        let rx = startX;
+        let ry = startY;
+        let rw = w;
+        let rh = h;
+
+        // Handle negative dimensions (dragging left/up)
+        if (rw < 0) {
+            rx += rw;
+            rw = -rw;
+        }
+        if (rh < 0) {
+            ry += rh;
+            rh = -rh;
+        }
+
+        if (rw < 1 || rh < 1) return;
+
+        // Grab pixels from the canvas itself (what's drawn so far)
+        const imageData = ctx.getImageData(rx, ry, rw, rh);
+        const data = imageData.data;
+        const sw = imageData.width;
+        const sh = imageData.height;
+        
+        const size = Math.floor(pixelSize * window.devicePixelRatio); 
+
+        for (let y = 0; y < sh; y += size) {
+            for (let x = 0; x < sw; x += size) {
+                // Get center pixel color
+                const pY = Math.min(y + Math.floor(size/2), sh-1);
+                const pX = Math.min(x + Math.floor(size/2), sw-1);
+                const i = (pY * sw + pX) * 4;
+                const r = data[i];
+                const g = data[i + 1];
+                const b = data[i + 2];
+                const a = data[i + 3];
+
+                // Fill block
+                for (let by = y; by < y + size && by < sh; by++) {
+                    for (let bx = x; bx < x + size && bx < sw; bx++) {
+                        const bi = (by * sw + bx) * 4;
+                        data[bi] = r;
+                        data[bi + 1] = g;
+                        data[bi + 2] = b;
+                        data[bi + 3] = a;
+                    }
+                }
+            }
+        }
+        
+        ctx.putImageData(imageData, rx, ry);
+        
+    } catch (e) {
+        // Fallback or ignore
+    }
+}
 
 export const renderCanvas = (
   canvas: HTMLCanvasElement,
   ctx: CanvasRenderingContext2D,
   bgImage: HTMLImageElement | null,
   elements: DrawingElement[],
-  activeElement: DrawingElement | null, // Currently drawing element
+  activeElement: DrawingElement | null, 
   selectedElementId: string | null,
   scale: number = 1,
-  pixelRatio: number = 1 // New Argument for DPI support
+  pixelRatio: number = 1 
 ) => {
-  // --- High DPI Setup ---
-  // Reset transform to identity before clearing
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  // Clear the full physical canvas
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   
-  // Apply DPI scaling
-  // All subsequent drawing commands will be in "logical" pixels, but rendered at high resolution
+  // Base Scale for High DPI
   ctx.scale(pixelRatio, pixelRatio);
-
-  // Set Smoothing
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
 
-  // Draw Background Image
+  // Draw Background
   if (bgImage) {
     ctx.drawImage(bgImage, 0, 0);
   } else {
-    // Placeholder background if no image
-    // Use logical width/height from canvas style (or calculated from physical / ratio)
     const logicalW = canvas.width / pixelRatio;
     const logicalH = canvas.height / pixelRatio;
-    
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, logicalW, logicalH);
     if (elements.length === 0 && !activeElement) {
@@ -180,31 +234,64 @@ export const renderCanvas = (
     }
   }
 
-  // Draw Saved Elements
+  // Draw Elements
   elements.forEach((el) => {
     drawElement(ctx, el);
-    if (el.id === selectedElementId) {
-      drawSelectionBorder(ctx, el);
-    }
   });
 
-  // Draw Active Element (Ghost/Drawing in progress)
+  // Draw Active Element
   if (activeElement) {
     drawElement(ctx, activeElement);
-    // If drawing a text box, show the box border
-    if (activeElement.type === 'text') {
+    if (activeElement.type === 'text' || activeElement.type === 'crop') {
        ctx.save();
-       ctx.strokeStyle = '#94a3b8';
-       ctx.setLineDash([5, 5]);
-       ctx.strokeRect(activeElement.x || 0, activeElement.y || 0, activeElement.width || 0, activeElement.height || 0);
+       ctx.strokeStyle = activeElement.type === 'crop' ? '#000' : '#94a3b8';
+       if (activeElement.type === 'crop') {
+           ctx.setLineDash([5, 5]);
+           ctx.lineWidth = 2;
+           ctx.strokeRect(activeElement.x || 0, activeElement.y || 0, activeElement.width || 0, activeElement.height || 0);
+           // Dim outside
+           ctx.fillStyle = 'rgba(0,0,0,0.3)';
+           // 4 rects to dim outside
+           const ax = activeElement.x || 0;
+           const ay = activeElement.y || 0;
+           const aw = activeElement.width || 0;
+           const ah = activeElement.height || 0;
+           const cw = canvas.width / pixelRatio;
+           const ch = canvas.height / pixelRatio;
+           
+           ctx.fillRect(0, 0, cw, ay); // Top
+           ctx.fillRect(0, ay + ah, cw, ch - (ay + ah)); // Bottom
+           ctx.fillRect(0, ay, ax, ah); // Left
+           ctx.fillRect(ax + aw, ay, cw - (ax + aw), ah); // Right
+       } else {
+           ctx.setLineDash([5, 5]);
+           ctx.strokeRect(activeElement.x || 0, activeElement.y || 0, activeElement.width || 0, activeElement.height || 0);
+       }
        ctx.restore();
     }
+  }
+  
+  // Selection Border (drawn on top of everything)
+  const selectedEl = elements.find(e => e.id === selectedElementId);
+  if (selectedEl) {
+      drawSelectionBorder(ctx, selectedEl);
   }
 };
 
 const drawSelectionBorder = (ctx: CanvasRenderingContext2D, el: DrawingElement) => {
   ctx.save();
-  ctx.strokeStyle = '#3b82f6'; // Brand blue
+  
+  // Translate & Rotate to match element
+  const cx = (el.x || 0) + (el.width || 0) / 2;
+  const cy = (el.y || 0) + (el.height || 0) / 2;
+  
+  if (el.type !== 'pen' && el.type !== 'highlighter' && el.type !== 'stamp') {
+      ctx.translate(cx, cy);
+      if (el.rotation) ctx.rotate(el.rotation);
+      ctx.translate(-cx, -cy);
+  }
+
+  ctx.strokeStyle = el.locked ? '#ef4444' : '#3b82f6'; 
   ctx.lineWidth = 1;
   ctx.setLineDash([5, 5]);
   
@@ -214,28 +301,17 @@ const drawSelectionBorder = (ctx: CanvasRenderingContext2D, el: DrawingElement) 
   let w = el.width || 0;
   let h = el.height || 0;
 
-  // Calculate bounding box for paths
-  if ((el.type === 'pen' || el.type === 'highlighter') && el.points) {
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    el.points.forEach(p => {
-      minX = Math.min(minX, p.x);
-      minY = Math.min(minY, p.y);
-      maxX = Math.max(maxX, p.x);
-      maxY = Math.max(maxY, p.y);
-    });
-    x = minX;
-    y = minY;
-    w = maxX - minX;
-    h = maxY - minY;
+  if (el.type === 'pen' || el.type === 'highlighter') {
+      if (el.points) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        el.points.forEach(p => { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); });
+        x = minX; y = minY; w = maxX - minX; h = maxY - minY;
+      }
   } else if (el.type === 'stamp') {
       const radius = 10 + el.strokeWidth;
-      x = (el.x || 0) - radius;
-      y = (el.y || 0) - radius;
-      w = radius * 2;
-      h = radius * 2;
+      x = (el.x || 0) - radius; y = (el.y || 0) - radius; w = radius * 2; h = radius * 2;
   }
 
-  // Normalize Rect/Arrow for border drawing (handle negative width/height)
   const drawX = w < 0 ? x + w : x;
   const drawY = h < 0 ? y + h : y;
   const drawW = Math.abs(w);
@@ -244,9 +320,7 @@ const drawSelectionBorder = (ctx: CanvasRenderingContext2D, el: DrawingElement) 
   // Draw border
   ctx.strokeRect(drawX - padding, drawY - padding, drawW + padding * 2, drawH + padding * 2);
   
-  // Draw Resize Handles (8 points)
-  // Only for Rect, Text, Image, Arrow
-  if (['rect', 'image', 'text', 'arrow'].includes(el.type)) {
+  if (!el.locked && ['rect', 'image', 'text', 'arrow', 'pixelate'].includes(el.type)) {
       ctx.setLineDash([]);
       ctx.fillStyle = '#ffffff';
       ctx.strokeStyle = '#3b82f6';
@@ -254,7 +328,6 @@ const drawSelectionBorder = (ctx: CanvasRenderingContext2D, el: DrawingElement) 
       const handleSize = 8;
       const half = handleSize / 2;
 
-      // Positions
       const left = drawX - padding;
       const right = drawX + drawW + padding;
       const top = drawY - padding;
@@ -262,21 +335,32 @@ const drawSelectionBorder = (ctx: CanvasRenderingContext2D, el: DrawingElement) 
       const midX = drawX + drawW / 2;
       const midY = drawY + drawH / 2;
 
+      // Resize Handles
       const handles = [
-          { x: left, y: top }, // NW
-          { x: midX, y: top }, // N
-          { x: right, y: top }, // NE
-          { x: right, y: midY }, // E
-          { x: right, y: bottom }, // SE
-          { x: midX, y: bottom }, // S
-          { x: left, y: bottom }, // SW
-          { x: left, y: midY }, // W
+          { x: left, y: top }, { x: midX, y: top }, { x: right, y: top },
+          { x: right, y: midY }, { x: right, y: bottom }, { x: midX, y: bottom },
+          { x: left, y: bottom }, { x: left, y: midY },
       ];
 
       handles.forEach(hPos => {
           ctx.fillRect(hPos.x - half, hPos.y - half, handleSize, handleSize);
           ctx.strokeRect(hPos.x - half, hPos.y - half, handleSize, handleSize);
       });
+
+      // Rotation Handle (Top Center, sticking out)
+      const rotDist = 20;
+      const rotX = midX;
+      const rotY = top - rotDist;
+      
+      ctx.beginPath();
+      ctx.moveTo(midX, top);
+      ctx.lineTo(rotX, rotY);
+      ctx.stroke();
+      
+      ctx.beginPath();
+      ctx.arc(rotX, rotY, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
   }
 
   ctx.restore();
@@ -284,6 +368,34 @@ const drawSelectionBorder = (ctx: CanvasRenderingContext2D, el: DrawingElement) 
 
 const drawElement = (ctx: CanvasRenderingContext2D, el: DrawingElement) => {
   ctx.save();
+  
+  if (el.type === 'pixelate') {
+       if (!el.rotation) {
+           ctx.translate(el.x || 0, el.y || 0);
+           applyPixelate(ctx, el.width || 0, el.height || 0, 10);
+           ctx.restore();
+           return;
+       }
+       // Fallback for rotated pixelate (just transparent gray)
+       ctx.translate((el.x || 0) + (el.width || 0)/2, (el.y || 0) + (el.height || 0)/2);
+       if (el.rotation) ctx.rotate(el.rotation);
+       ctx.translate(-(el.width || 0)/2, -(el.height || 0)/2);
+       ctx.fillStyle = 'rgba(100,100,100,0.2)';
+       ctx.fillRect(0, 0, el.width || 0, el.height || 0);
+       ctx.restore();
+       return;
+  }
+
+  // Common Transformations
+  const cx = (el.x || 0) + (el.width || 0) / 2;
+  const cy = (el.y || 0) + (el.height || 0) / 2;
+
+  if (['rect', 'image', 'text', 'arrow', 'stamp'].includes(el.type)) {
+      ctx.translate(cx, cy);
+      if (el.rotation) ctx.rotate(el.rotation);
+      ctx.translate(-cx, -cy);
+  }
+
   ctx.beginPath();
   
   const isHighlighter = el.type === 'highlighter';
@@ -307,13 +419,9 @@ const drawElement = (ctx: CanvasRenderingContext2D, el: DrawingElement) => {
       ctx.stroke();
     }
   } else if (el.type === 'rect') {
-    if (el.x !== undefined && el.y !== undefined && el.width !== undefined && el.height !== undefined) {
-      ctx.strokeRect(el.x, el.y, el.width, el.height);
-    }
+      ctx.strokeRect(el.x || 0, el.y || 0, el.width || 0, el.height || 0);
   } else if (el.type === 'arrow') {
-      if (el.x !== undefined && el.y !== undefined && el.width !== undefined && el.height !== undefined) {
-          drawArrow(ctx, el.x, el.y, el.width, el.height, el.strokeWidth, el.arrowStyle || 'filled');
-      }
+      drawArrow(ctx, el.x || 0, el.y || 0, el.width || 0, el.height || 0, el.strokeWidth, el.arrowStyle || 'filled');
   } else if (el.type === 'stamp') {
       if (el.x !== undefined && el.y !== undefined && el.text) {
           drawStamp(ctx, el.x, el.y, el.text, el.color, el.strokeWidth);
@@ -323,17 +431,14 @@ const drawElement = (ctx: CanvasRenderingContext2D, el: DrawingElement) => {
        const fontSize = el.strokeWidth * 6;
        ctx.font = `${fontSize}px sans-serif`; 
        ctx.textBaseline = 'top'; 
-       // Support multi-line drawing with wrapText
-       // If width is undefined or 0, we treat it as infinite width but still respect newlines
-       // wrapText now handles newlines automatically
        wrapText(ctx, el.text, el.x, el.y, el.width || 0, fontSize * 1.2);
      }
   } else if (el.type === 'image' && el.imageData) {
      const img = getImage(el.imageData);
-     if (img && el.x !== undefined && el.y !== undefined && el.width !== undefined && el.height !== undefined) {
-         ctx.drawImage(img, el.x, el.y, el.width, el.height);
-     } else if (!img && el.x !== undefined) {
-         ctx.strokeRect(el.x, el.y!, el.width!, el.height!);
+     if (img) {
+         ctx.drawImage(img, el.x || 0, el.y || 0, el.width || 0, el.height || 0);
+     } else {
+         ctx.strokeRect(el.x || 0, el.y || 0, el.width || 0, el.height || 0);
      }
   }
 
@@ -342,34 +447,6 @@ const drawElement = (ctx: CanvasRenderingContext2D, el: DrawingElement) => {
 
 export const getMousePos = (canvas: HTMLCanvasElement, evt: React.MouseEvent | MouseEvent): { x: number, y: number } => {
   const rect = canvas.getBoundingClientRect();
-  
-  // Calculate the scale between the actual CSS size (rect) and the internal canvas size
-  // NOTE: canvas.width is now the HIGH DPI width (e.g. 1600), rect.width is CSS width (e.g. 800)
-  // This existing logic actually still works because (1600 / 800) = 2, which matches the DPI scaling.
-  // We return logical coordinates for the app state, so we just need to be careful.
-  
-  // However, since we are scaling the Context by the pixel ratio in renderCanvas, 
-  // the draw functions expect Logical Coordinates.
-  // The mouse event gives CSS Screen Coordinates.
-  // We need to map CSS Screen -> Logical Canvas.
-  // CSS Width = rect.width. Logical Canvas Width = tab.canvasWidth.
-  // They SHOULD be identical usually, unless CSS is resizing it responsively.
-  
-  // The internal canvas.width is tab.canvasWidth * pixelRatio.
-  
-  const scaleX = canvas.width / rect.width; // e.g. 2
-  const scaleY = canvas.height / rect.height; // e.g. 2
-  
-  // We want to return logical coordinates. 
-  // If scaleX is 2 (Retina), it means 1 CSS pixel = 2 Canvas pixels.
-  // But our renderCanvas does ctx.scale(2, 2). So drawing at 100 draws at 200 physical.
-  // So we should return coordinates relative to the "Unscaled" logical size.
-  
-  // Simplest approach:
-  // The logic in Editor component relies on `tab.scale` (Zoom) separately.
-  // This helper returns coordinates relative to the DOM element size.
-  
-  // Let's rely on the fact that canvas style width matches the logical width.
   return {
     x: (evt.clientX - rect.left) * (canvas.width / rect.width) / (window.devicePixelRatio || 1),
     y: (evt.clientY - rect.top) * (canvas.height / rect.height) / (window.devicePixelRatio || 1)
@@ -385,25 +462,42 @@ export const blobToDataURL = (blob: Blob): Promise<string> => {
   });
 };
 
-// Hit detection
+// Hit detection with Rotation Support
 export const isPointInElement = (x: number, y: number, el: DrawingElement, ctx: CanvasRenderingContext2D): boolean => {
+    // Basic Bounds
     let bx = el.x || 0;
     let by = el.y || 0;
     let bw = el.width || 0;
     let bh = el.height || 0;
-
-    // Normalize negative dimensions
     if (bw < 0) { bx += bw; bw = Math.abs(bw); }
     if (bh < 0) { by += bh; bh = Math.abs(bh); }
 
-    if (el.type === 'rect' || el.type === 'image' || el.type === 'text' || el.type === 'arrow') {
-        // use bounding box
+    // If rotated, rotate the test point AROUND the element center in REVERSE
+    if (el.rotation && el.rotation !== 0 && ['rect', 'image', 'text', 'arrow', 'pixelate'].includes(el.type)) {
+        const cx = bx + bw / 2;
+        const cy = by + bh / 2;
+        
+        // Translate point to origin relative to center
+        const dx = x - cx;
+        const dy = y - cy;
+        
+        // Rotate backwards
+        const cos = Math.cos(-el.rotation);
+        const sin = Math.sin(-el.rotation);
+        
+        const rx = dx * cos - dy * sin;
+        const ry = dx * sin + dy * cos;
+        
+        // Translate back
+        x = rx + cx;
+        y = ry + cy;
+    }
+
+    if (el.type === 'rect' || el.type === 'image' || el.type === 'text' || el.type === 'arrow' || el.type === 'pixelate') {
         const padding = 5;
-        // For arrow, checking the diagonal line is hard, bounding box is acceptable for now
         return x >= bx - padding && x <= bx + bw + padding && y >= by - padding && y <= by + bh + padding;
     }
     else if (el.type === 'stamp') {
-        // Circle hit detection
         if (el.x !== undefined && el.y !== undefined) {
             const radius = 10 + el.strokeWidth;
             const dx = x - el.x;
@@ -413,14 +507,8 @@ export const isPointInElement = (x: number, y: number, el: DrawingElement, ctx: 
         return false;
     }
     else if ((el.type === 'pen' || el.type === 'highlighter') && el.points) {
-        // Bounding box for paths roughly
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        el.points.forEach(p => {
-          minX = Math.min(minX, p.x);
-          minY = Math.min(minY, p.y);
-          maxX = Math.max(maxX, p.x);
-          maxY = Math.max(maxY, p.y);
-        });
+        el.points.forEach(p => { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); });
         bx = minX; by = minY; bw = maxX - minX; bh = maxY - minY;
         const padding = Math.max(5, el.strokeWidth);
         bx -= padding; by -= padding; bw += padding*2; bh += padding*2;
@@ -431,10 +519,11 @@ export const isPointInElement = (x: number, y: number, el: DrawingElement, ctx: 
 };
 
 // Check which resize handle is hit
-export type ResizeHandleType = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | null;
+export type ResizeHandleType = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'rotate' | null;
 
 export const getResizeHandleType = (x: number, y: number, el: DrawingElement): ResizeHandleType => {
-    if (!['rect', 'text', 'image', 'arrow'].includes(el.type)) return null;
+    if (el.locked) return null;
+    if (!['rect', 'text', 'image', 'arrow', 'pixelate'].includes(el.type)) return null;
     
     const handleSize = 12; 
     const half = handleSize / 2;
@@ -444,10 +533,22 @@ export const getResizeHandleType = (x: number, y: number, el: DrawingElement): R
     let by = el.y || 0;
     let bw = el.width || 0;
     let bh = el.height || 0;
-
-    // Normalize for hit testing handles
     if (bw < 0) { bx += bw; bw = Math.abs(bw); }
     if (bh < 0) { by += bh; bh = Math.abs(bh); }
+
+    // Apply Inverse Rotation to Mouse Point if element is rotated
+    if (el.rotation && el.rotation !== 0) {
+        const cx = bx + bw / 2;
+        const cy = by + bh / 2;
+        const dx = x - cx;
+        const dy = y - cy;
+        const cos = Math.cos(-el.rotation);
+        const sin = Math.sin(-el.rotation);
+        const rx = dx * cos - dy * sin;
+        const ry = dx * sin + dy * cos;
+        x = rx + cx;
+        y = ry + cy;
+    }
 
     const left = bx - padding;
     const right = bx + bw + padding;
@@ -469,15 +570,19 @@ export const getResizeHandleType = (x: number, y: number, el: DrawingElement): R
     if (check(left, bottom)) return 'sw';
     if (check(left, midY)) return 'w';
 
+    // Rotation Handle (Top Center - 20px)
+    if (check(midX, top - 20)) return 'rotate';
+
     return null;
 }
 
-export const getCursorForHandle = (handle: ResizeHandleType) => {
+export const getCursorForHandle = (handle: ResizeHandleType, rotation: number = 0) => {
     switch(handle) {
         case 'n': case 's': return 'ns-resize';
         case 'e': case 'w': return 'ew-resize';
         case 'nw': case 'se': return 'nwse-resize';
         case 'ne': case 'sw': return 'nesw-resize';
+        case 'rotate': return 'alias'; 
         default: return 'default';
     }
 }

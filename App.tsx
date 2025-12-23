@@ -11,12 +11,10 @@ const DEFAULT_WIDTH = 800;
 const DEFAULT_HEIGHT = 600;
 
 function App() {
-  // Global counter for sequential naming (e.g. Image_001, Image_002)
   const [tabCounter, setTabCounter] = useState(1);
   const [darkMode, setDarkMode] = useState(false);
-  
-  // Stamp Counter
   const [stampCounter, setStampCounter] = useState(1);
+  const [clipboardElement, setClipboardElement] = useState<DrawingElement | null>(null);
   
   const [tabs, setTabs] = useState<TabData[]>([
     {
@@ -32,7 +30,6 @@ function App() {
     }
   ]);
 
-  // Dark Mode Effect
   useEffect(() => {
     if (darkMode) {
         document.documentElement.classList.add('dark');
@@ -41,10 +38,9 @@ function App() {
     }
   }, [darkMode]);
   
-  // Update counter after initial render so next is 002
   useEffect(() => {
      if (tabCounter === 1 && tabs.length > 0) setTabCounter(2);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []); 
 
   const [activeTabId, setActiveTabId] = useState<string>('1');
   
@@ -62,24 +58,15 @@ function App() {
       updateTab(id, { title: newTitle });
   };
 
-  // --- Auto Fit Logic ---
   const calculateFitScale = (imgW: number, imgH: number) => {
-    // Adjusted for compact UI: Headers (~80px) + Footers (~30px)
     const availableW = window.innerWidth - 48; 
     const availableH = window.innerHeight - 110; 
-    
     if (imgW <= 0 || imgH <= 0) return 1;
-
     const scaleW = availableW / imgW;
     const scaleH = availableH / imgH;
-    
-    // Fit entire image, max 1.0 (don't zoom in pixelated) unless very small
     return Math.min(scaleW, scaleH, 1);
   };
 
-  // --- Sync Selection <-> Toolbar ---
-  
-  // When selection changes, update toolbar settings to match selected object
   useEffect(() => {
     if (selectedElementId) {
         const el = activeTab.elements.find(e => e.id === selectedElementId);
@@ -94,11 +81,8 @@ function App() {
     }
   }, [selectedElementId, activeTab.elements]);
 
-  // Handle changing settings while an element is selected
   const handleToolSettingsChange = (newSettings: ToolSettings) => {
       setToolSettings(newSettings);
-
-      // If we have a selection, update its properties immediately
       if (selectedElementId) {
           const updatedElements = activeTab.elements.map(el => {
               if (el.id === selectedElementId) {
@@ -111,8 +95,6 @@ function App() {
               }
               return el;
           });
-          
-          // Only update if something actually changed to avoid loop
           const currentEl = activeTab.elements.find(e => e.id === selectedElementId);
           if (currentEl && (
               currentEl.color !== newSettings.color || 
@@ -130,7 +112,107 @@ function App() {
       }
   };
 
-  // --- Unsaved Changes Warning ---
+  const handleToggleLock = () => {
+    if (selectedElementId) {
+        const updatedElements = activeTab.elements.map(el => {
+            if (el.id === selectedElementId) {
+                return { ...el, locked: !el.locked };
+            }
+            return el;
+        });
+        
+        const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
+        newHistory.push(updatedElements);
+        updateTab(activeTabId, { 
+            elements: updatedElements,
+            history: newHistory,
+            historyIndex: newHistory.length - 1
+        });
+    }
+  };
+
+  const handleLayerOrder = (action: 'front' | 'back' | 'forward' | 'backward') => {
+      if (!selectedElementId) return;
+      const index = activeTab.elements.findIndex(e => e.id === selectedElementId);
+      if (index === -1) return;
+
+      const newElements = [...activeTab.elements];
+      const el = newElements[index];
+      
+      newElements.splice(index, 1); // remove
+
+      if (action === 'front') {
+          newElements.push(el);
+      } else if (action === 'back') {
+          newElements.unshift(el);
+      } else if (action === 'forward') {
+          const newIndex = Math.min(newElements.length, index + 1);
+          newElements.splice(newIndex, 0, el);
+      } else if (action === 'backward') {
+          const newIndex = Math.max(0, index - 1);
+          newElements.splice(newIndex, 0, el);
+      }
+
+      const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
+      newHistory.push(newElements);
+      updateTab(activeTabId, { 
+          elements: newElements,
+          history: newHistory,
+          historyIndex: newHistory.length - 1
+      });
+  };
+
+  const handleCrop = async (cropX: number, cropY: number, cropW: number, cropH: number) => {
+      // 1. Crop Background Image if exists
+      let newImageDataUrl = activeTab.imageDataUrl;
+      
+      if (activeTab.imageDataUrl) {
+          const img = new Image();
+          img.src = activeTab.imageDataUrl;
+          await new Promise<void>((resolve) => { img.onload = () => resolve(); });
+          
+          const canvas = document.createElement('canvas');
+          canvas.width = cropW;
+          canvas.height = cropH;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+              // Draw slice of original image
+              ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+              newImageDataUrl = canvas.toDataURL();
+          }
+      }
+
+      // 2. Shift Elements
+      const newElements = activeTab.elements.map(el => {
+          const copy = { ...el };
+          if (copy.x !== undefined) copy.x -= cropX;
+          if (copy.y !== undefined) copy.y -= cropY;
+          if (copy.points) copy.points = copy.points.map(p => ({ x: p.x - cropX, y: p.y - cropY }));
+          return copy;
+      });
+
+      // 3. Update Tab
+      const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
+      newHistory.push(newElements); // Note: History currently only tracks elements, not background/canvas size. 
+      // A full history system would track the entire TabData. 
+      // For this implementation, crop is somewhat destructive to canvas size history, 
+      // but undo will restore ELEMENTS position relative to the NEW crop, which might look weird if we don't restore canvas size.
+      // To properly support Undo for Crop, we would need to store canvasWidth/Height/ImageData in history.
+      // For simplicity in this lightweight app, we will just update current state and accept Undo affects elements only.
+
+      updateTab(activeTabId, {
+          imageDataUrl: newImageDataUrl,
+          canvasWidth: cropW,
+          canvasHeight: cropH,
+          elements: newElements,
+          history: newHistory,
+          historyIndex: newHistory.length - 1
+      });
+      
+      // Reset tool
+      setActiveTool('select');
+  };
+
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       const hasContent = tabs.some(t => t.elements.length > 0 || t.imageDataUrl !== null);
@@ -143,19 +225,14 @@ function App() {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [tabs]);
 
-  // --- Tab Management ---
-
   const createNewTab = (imgData: string | null = null, w = DEFAULT_WIDTH, h = DEFAULT_HEIGHT) => {
     const newId = Date.now().toString();
     const title = `Image_${String(tabCounter).padStart(3, '0')}`;
     setTabCounter(prev => prev + 1);
-
-    // Calc auto scale if image is present
     let initialScale = 1;
     if (imgData) {
         initialScale = calculateFitScale(w, h);
     }
-
     const newTab: TabData = {
       id: newId,
       title: title,
@@ -178,9 +255,7 @@ function App() {
     if (tabToClose && (tabToClose.elements.length > 0 || tabToClose.imageDataUrl)) {
         if (!window.confirm('This tab has unsaved changes. Close anyway?')) return;
     }
-
     if (tabs.length === 1) return;
-    
     const newTabs = tabs.filter(t => t.id !== id);
     setTabs(newTabs);
     if (activeTabId === id) {
@@ -188,16 +263,12 @@ function App() {
     }
   };
 
-
-  // --- Clipboard Integration ---
-
   const processImageBlob = useCallback(async (blob: Blob) => {
       const dataUrl = await blobToDataURL(blob);
       const img = new Image();
       img.src = dataUrl;
       img.onload = () => {
-          // 1. If empty tab, set as background
-          if (!activeTab.imageDataUrl && activeTab.elements.length === 0) {
+          if (!activeTab.imageDataUrl) {
               const autoScale = calculateFitScale(img.width, img.height);
               updateTab(activeTabId, {
                   imageDataUrl: dataUrl,
@@ -206,7 +277,6 @@ function App() {
                   scale: autoScale
               });
           } else {
-              // 2. Paste as Layer
               setActiveTool('select');
               const newElement: DrawingElement = {
                   id: Date.now().toString(),
@@ -217,13 +287,12 @@ function App() {
                   width: img.width,
                   height: img.height,
                   color: '#000',
-                  strokeWidth: 0
+                  strokeWidth: 0,
+                  locked: true
               };
-              
               const newElements = [...activeTab.elements, newElement];
               const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
               newHistory.push(newElements);
-              
               updateTab(activeTabId, {
                   elements: newElements,
                   history: newHistory,
@@ -238,24 +307,40 @@ function App() {
     const target = e.target as HTMLElement;
     if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
 
-    // Word Paste Quality Fix:
-    // Prioritize Async Clipboard API > DataTransfer Items
-    // Prioritize PNG > JPEG to avoid artifacts
-    
-    e.preventDefault(); // Prevent default immediately to handle manually
+    if (clipboardElement) {
+        e.preventDefault();
+        const offset = 20;
+        const newEl = { 
+            ...clipboardElement, 
+            id: Date.now().toString(),
+            x: (clipboardElement.x || 0) + offset,
+            y: (clipboardElement.y || 0) + offset
+        };
+        if (newEl.points) {
+            newEl.points = newEl.points.map(p => ({ x: p.x + offset, y: p.y + offset }));
+        }
+        const newElements = [...activeTab.elements, newEl];
+        const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
+        newHistory.push(newElements);
+        updateTab(activeTabId, { 
+            elements: newElements,
+            history: newHistory,
+            historyIndex: newHistory.length - 1
+        });
+        setSelectedElementId(newEl.id);
+        return;
+    }
 
-    // Method 1: Async Clipboard API (Higher quality from system clipboard)
+    e.preventDefault(); 
     if (navigator.clipboard && navigator.clipboard.read) {
         try {
             const clipboardItems = await navigator.clipboard.read();
             for (const item of clipboardItems) {
-                // Prioritize PNG
                 if (item.types.includes('image/png')) {
                     const blob = await item.getType('image/png');
                     processImageBlob(blob);
                     return;
                 }
-                // Fallback to other images
                 const imageType = item.types.find(type => type.startsWith('image/'));
                 if (imageType) {
                     const blob = await item.getType(imageType);
@@ -264,11 +349,9 @@ function App() {
                 }
             }
         } catch (err) {
-            console.warn("Async clipboard read failed, falling back to event data", err);
+            console.warn("Async clipboard read failed", err);
         }
     }
-
-    // Method 2: Fallback to Event Data (Legacy / Restricted context)
     if (e.clipboardData && e.clipboardData.items) {
         const items = e.clipboardData.items;
         for (let i = 0; i < items.length; i++) {
@@ -281,15 +364,12 @@ function App() {
             }
         }
     }
-
-  }, [processImageBlob]);
+  }, [clipboardElement, processImageBlob, activeTab.elements, activeTab.history, activeTab.historyIndex, activeTabId, updateTab]);
 
   useEffect(() => {
     window.addEventListener('paste', handlePaste);
     return () => window.removeEventListener('paste', handlePaste);
   }, [handlePaste]);
-
-  // --- Shortcuts & Actions ---
 
   const performUndo = useCallback(() => {
     if (activeTab.historyIndex > 0) {
@@ -328,10 +408,15 @@ function App() {
   }, [selectedElementId, activeTab, activeTabId, updateTab]);
 
   const handleCopy = async () => {
-      // Force deselect so the selection border isn't copied
+      if (selectedElementId) {
+          const el = activeTab.elements.find(e => e.id === selectedElementId);
+          if (el) {
+              setClipboardElement(el);
+          }
+          return;
+      }
       setSelectedElementId(null);
-      
-      // Give React a frame to re-render the canvas without the selection border
+      setClipboardElement(null); 
       setTimeout(() => {
           const canvas = document.querySelector('canvas');
           if (canvas) {
@@ -341,7 +426,6 @@ function App() {
                         await navigator.clipboard.write([
                             new ClipboardItem({ 'image/png': blob })
                         ]);
-                        // Optional: Show a toast, but keeping it silent is more native-like for Ctrl+C
                       } catch (err) {
                           console.error('Failed to copy', err);
                           alert('Failed to copy to clipboard.');
@@ -374,7 +458,6 @@ function App() {
                   handleDeleteSelected();
               }
           } else if (e.key === 'Escape') {
-             // Quick switch to select tool
              setActiveTool('select');
              setSelectedElementId(null);
           }
@@ -412,45 +495,29 @@ function App() {
   const handleSaveAll = async () => {
     setSelectedElementId(null);
     const dpr = window.devicePixelRatio || 1;
-    
-    // Process sequentially to allow browser download triggers
     for (let i = 0; i < tabs.length; i++) {
         const t = tabs[i];
-        
-        // Create an off-screen canvas with High DPI
         const canvas = document.createElement('canvas');
         canvas.width = t.canvasWidth * dpr;
         canvas.height = t.canvasHeight * dpr;
         const ctx = canvas.getContext('2d');
-        
         if (!ctx) continue;
-
-        // Ensure Background Image is loaded for rendering
         let bgImg: HTMLImageElement | null = null;
         if (t.imageDataUrl) {
             await new Promise<void>((resolve) => {
                 const img = new Image();
-                img.onload = () => {
-                    bgImg = img;
-                    resolve();
-                };
-                img.onerror = () => resolve(); // proceed even if fail
+                img.onload = () => { bgImg = img; resolve(); };
+                img.onerror = () => resolve(); 
                 img.src = t.imageDataUrl!;
             });
         }
-
-        // Render using shared draw logic
         renderCanvas(canvas, ctx, bgImg, t.elements, null, null, 1, dpr);
-
-        // Download
         const link = document.createElement('a');
         link.download = `${t.title}.png`;
         link.href = canvas.toDataURL('image/png');
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
-
-        // Small delay to prevent browser throttling multiple downloads
         await new Promise(resolve => setTimeout(resolve, 300));
     }
   };
@@ -478,6 +545,7 @@ function App() {
         canUndo={activeTab.historyIndex > 0}
         canRedo={activeTab.historyIndex < activeTab.history.length - 1}
         hasSelection={!!selectedElementId}
+        selectedElement={selectedElementId ? activeTab.elements.find(e => e.id === selectedElementId) : undefined}
         onUndo={performUndo}
         onRedo={performRedo}
         onDeleteSelected={handleDeleteSelected}
@@ -485,6 +553,8 @@ function App() {
         onSave={handleSave}
         onSaveAll={handleSaveAll}
         onCopy={handleCopy}
+        onToggleLock={handleToggleLock}
+        onLayerOrder={handleLayerOrder}
         darkMode={darkMode}
         toggleDarkMode={() => setDarkMode(!darkMode)}
         stampCounter={stampCounter}
@@ -501,9 +571,9 @@ function App() {
         setSelectedElementId={setSelectedElementId}
         stampCounter={stampCounter}
         onStamp={() => setStampCounter(c => c + 1)}
+        onCrop={handleCrop}
       />
       
-      {/* Footer Info - Compact Mode */}
       <div className="bg-brand-50 dark:bg-slate-800 border-t border-brand-100 dark:border-slate-700 px-3 py-1 text-xs text-brand-800 dark:text-brand-300 flex justify-between items-center select-none font-medium z-10 h-7 transition-colors">
          <div className="flex gap-1 items-center">
              <input 
@@ -522,7 +592,6 @@ function App() {
              <span className="opacity-80 ml-1">px</span>
          </div>
 
-         {/* Zoom Controls */}
          <div className="flex items-center gap-2">
             <button 
                 onClick={() => setScale(calculateFitScale(activeTab.canvasWidth, activeTab.canvasHeight))}
