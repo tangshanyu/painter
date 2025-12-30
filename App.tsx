@@ -288,7 +288,7 @@ function App() {
                   height: img.height,
                   color: '#000',
                   strokeWidth: 0,
-                  locked: true
+                  locked: false // Ensure new pasted images are unlocked and editable
               };
               const newElements = [...activeTab.elements, newElement];
               const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
