@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Minus, Plus, Maximize } from 'lucide-react';
 import TabList from './components/TabList';
 import Toolbar from './components/Toolbar';
@@ -15,6 +15,7 @@ function App() {
   const [darkMode, setDarkMode] = useState(false);
   const [stampCounter, setStampCounter] = useState(1);
   const [clipboardElement, setClipboardElement] = useState<DrawingElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   const [tabs, setTabs] = useState<TabData[]>([
     {
@@ -193,12 +194,7 @@ function App() {
 
       // 3. Update Tab
       const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
-      newHistory.push(newElements); // Note: History currently only tracks elements, not background/canvas size. 
-      // A full history system would track the entire TabData. 
-      // For this implementation, crop is somewhat destructive to canvas size history, 
-      // but undo will restore ELEMENTS position relative to the NEW crop, which might look weird if we don't restore canvas size.
-      // To properly support Undo for Crop, we would need to store canvasWidth/Height/ImageData in history.
-      // For simplicity in this lightweight app, we will just update current state and accept Undo affects elements only.
+      newHistory.push(newElements); 
 
       updateTab(activeTabId, {
           imageDataUrl: newImageDataUrl,
@@ -302,6 +298,87 @@ function App() {
           }
       };
   }, [activeTab, activeTabId, updateTab, calculateFitScale, setSelectedElementId]);
+
+  const handleOpenFileClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = e.target.files;
+      if (!files || files.length === 0) return;
+
+      // Convert FileList to array and process all
+      const fileProcs = Array.from(files).map(async (file: File) => {
+        const dataUrl = await blobToDataURL(file);
+        const img = new Image();
+        img.src = dataUrl;
+        await new Promise<void>(resolve => {
+             img.onload = () => resolve();
+             img.onerror = () => resolve(); // safety
+        });
+        return { file, dataUrl, width: img.width, height: img.height };
+      });
+
+      const loadedFiles = await Promise.all(fileProcs);
+
+      // Check if current tab is pristine (no background, no elements, no history)
+      const isClean = !activeTab.imageDataUrl && activeTab.elements.length === 0 && activeTab.history.length <= 1;
+
+      let newTabs = [...tabs];
+      let firstNewTabId: string | null = null;
+      let newTabCounter = tabCounter;
+
+      loadedFiles.forEach((item, index) => {
+        const autoScale = calculateFitScale(item.width, item.height);
+
+        // If it's the first file and the current tab is clean, overwrite current tab
+        if (index === 0 && isClean) {
+            newTabs = newTabs.map(t => t.id === activeTabId ? {
+                ...t,
+                title: item.file.name,
+                imageDataUrl: item.dataUrl,
+                canvasWidth: item.width,
+                canvasHeight: item.height,
+                scale: autoScale,
+                elements: [],
+                history: [[]],
+                historyIndex: 0
+            } : t);
+        } else {
+            // Create new tab
+            const newId = Date.now().toString() + index; // Ensure unique ID even in tight loop
+            // Try to name duplicate files if needed, but file.name is usually fine.
+            // If user uploads multiple "image.png", tabs will just have same name.
+            
+            const newTab: TabData = {
+                id: newId,
+                title: item.file.name,
+                imageDataUrl: item.dataUrl,
+                elements: [],
+                history: [[]],
+                historyIndex: 0,
+                canvasWidth: item.width,
+                canvasHeight: item.height,
+                scale: autoScale,
+            };
+            newTabs.push(newTab);
+            if (!firstNewTabId) firstNewTabId = newId;
+            newTabCounter++;
+        }
+      });
+      
+      setTabCounter(newTabCounter);
+      setTabs(newTabs);
+      
+      // If we created new tabs (didn't just overwrite clean tab), switch to the first new one
+      if (!isClean && firstNewTabId) {
+          setActiveTabId(firstNewTabId);
+      }
+      
+      setActiveTool('select');
+      // Reset value so we can select the same file again if needed
+      e.target.value = '';
+  };
 
   const handlePaste = useCallback(async (e: ClipboardEvent) => {
     const target = e.target as HTMLElement;
@@ -552,6 +629,7 @@ function App() {
         onClearAll={handleClearAll}
         onSave={handleSave}
         onSaveAll={handleSaveAll}
+        onOpenFile={handleOpenFileClick}
         onCopy={handleCopy}
         onToggleLock={handleToggleLock}
         onLayerOrder={handleLayerOrder}
@@ -559,6 +637,15 @@ function App() {
         toggleDarkMode={() => setDarkMode(!darkMode)}
         stampCounter={stampCounter}
         setStampCounter={setStampCounter}
+      />
+
+      <input 
+        type="file" 
+        ref={fileInputRef} 
+        onChange={handleFileChange} 
+        className="hidden" 
+        accept="image/*"
+        multiple
       />
 
       <Editor 

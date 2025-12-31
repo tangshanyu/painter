@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   MousePointer2, 
   Pen, 
@@ -33,7 +33,8 @@ import {
   Minus,
   Droplets,
   Brush,
-  Ban
+  Ban,
+  FolderOpen
 } from 'lucide-react';
 import { ToolType, ToolSettings, DrawingElement } from '../types';
 import { COLORS } from '../constants';
@@ -51,6 +52,7 @@ interface ToolbarProps {
   onRedo: () => void;
   onSave: () => void;
   onSaveAll: () => void;
+  onOpenFile: () => void;
   onCopy: () => void;
   onDeleteSelected: () => void;
   onClearAll: () => void;
@@ -75,6 +77,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
   onRedo,
   onSave,
   onSaveAll,
+  onOpenFile,
   onCopy,
   onDeleteSelected,
   onClearAll,
@@ -86,20 +89,25 @@ const Toolbar: React.FC<ToolbarProps> = ({
   setStampCounter
 }) => {
   
-  // Tools that appear directly on the bar
+  // Tools that appear directly on the bar (Standalone)
   const mainTools = [
     { id: 'select', icon: MousePointer2, label: 'Select' }, 
     { id: 'crop', icon: Crop, label: 'Crop Tool' },
     { id: 'eraser', icon: Eraser, label: 'Area Eraser' },
-    { id: 'pixelate', icon: Grid3X3, label: 'Mosaic / Blur' }, 
-    { id: 'pen', icon: Pen, label: 'Pen' },
-    { id: 'highlighter', icon: Highlighter, label: 'Highlighter' },
-    // Shapes moved to separate group
+    // Pen, Highlighter, Pixelate moved to drawTools group
     { id: 'arrow', icon: MoveUpRight, label: 'Arrow' },
     { id: 'stamp', icon: Stamp, label: 'Stamp' },
     { id: 'text', icon: Type, label: 'Text' },
   ] as const;
 
+  // New Group: Drawing & Effects
+  const drawTools = [
+      { id: 'pen', icon: Pen, label: 'Pen' },
+      { id: 'highlighter', icon: Highlighter, label: 'Highlighter' },
+      { id: 'pixelate', icon: Grid3X3, label: 'Mosaic / Blur' }, 
+  ] as const;
+
+  // Group: Shapes
   const shapeTools = [
       { id: 'rect', icon: Square, label: 'Rectangle' },
       { id: 'circle', icon: Circle, label: 'Circle' },
@@ -108,8 +116,29 @@ const Toolbar: React.FC<ToolbarProps> = ({
       { id: 'line', icon: Minus, label: 'Line' },
   ] as const;
 
+  // --- Logic for Drawing Tools Group ---
+  const isDrawActive = drawTools.some(t => t.id === currentTool);
+  const [lastDrawTool, setLastDrawTool] = useState<ToolType>('pen');
+
+  useEffect(() => {
+    if (isDrawActive) {
+      setLastDrawTool(currentTool);
+    }
+  }, [currentTool, isDrawActive]);
+
+  const activeDrawDef = drawTools.find(t => t.id === lastDrawTool) || drawTools[0];
+
+  // --- Logic for Shape Tools Group ---
   const isShapeActive = shapeTools.some(t => t.id === currentTool);
-  const activeShapeIcon = shapeTools.find(t => t.id === currentTool)?.icon || Shapes;
+  const [lastShape, setLastShape] = useState<ToolType>('rect');
+
+  useEffect(() => {
+    if (isShapeActive) {
+      setLastShape(currentTool);
+    }
+  }, [currentTool, isShapeActive]);
+
+  const activeShapeDef = shapeTools.find(t => t.id === lastShape) || shapeTools[0];
 
   const DOT_SIZES = [2, 4, 8, 12, 20];
   
@@ -130,7 +159,9 @@ const Toolbar: React.FC<ToolbarProps> = ({
       
       {/* Tools Group */}
       <div className="flex bg-slate-100 dark:bg-slate-700 p-0.5 rounded-lg gap-0.5 shrink-0">
-        {mainTools.map((t) => (
+        
+        {/* Render Select, Crop, Eraser first */}
+        {mainTools.slice(0, 3).map((t) => (
           <button
             key={t.id}
             onClick={() => setTool(t.id as ToolType)}
@@ -145,18 +176,55 @@ const Toolbar: React.FC<ToolbarProps> = ({
           </button>
         ))}
 
+        {/* Drawing Tools Group (Pen, Highlighter, Pixelate) */}
+        <div className="relative group">
+            <button
+                onClick={() => setTool(lastDrawTool)}
+                className={`p-1.5 rounded-md transition-all flex items-center justify-center ${
+                isDrawActive
+                    ? 'bg-white dark:bg-slate-600 shadow text-brand-600 dark:text-brand-400 ring-1 ring-black/5 dark:ring-white/10' 
+                    : 'text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600'
+                }`}
+                title={`Brush: ${activeDrawDef.label}`}
+            >
+                {/* Show the last used drawing tool icon */}
+                {React.createElement(activeDrawDef.icon, { size: 18 })}
+            </button>
+            
+            <div className={glassPanelClass}>
+                <div className="w-full text-xs text-center font-medium text-slate-500 dark:text-slate-300 mb-1">Brushes & Effects</div>
+                <div className="flex items-center gap-2">
+                    {drawTools.map((t) => (
+                         <button
+                            key={t.id}
+                            onClick={() => setTool(t.id as ToolType)}
+                            title={t.label}
+                            className={`p-2 rounded-lg transition-all flex items-center justify-center ${
+                            currentTool === t.id 
+                                ? 'bg-brand-100 dark:bg-slate-600 text-brand-600 dark:text-brand-400 shadow-sm' 
+                                : 'text-slate-500 dark:text-slate-400 hover:bg-white/50 dark:hover:bg-slate-600/50'
+                            }`}
+                        >
+                            <t.icon size={20} />
+                        </button>
+                    ))}
+                </div>
+            </div>
+        </div>
+
         {/* Shapes Group */}
         <div className="relative group">
             <button
+                onClick={() => setTool(lastShape)}
                 className={`p-1.5 rounded-md transition-all flex items-center justify-center ${
                 isShapeActive
                     ? 'bg-white dark:bg-slate-600 shadow text-brand-600 dark:text-brand-400 ring-1 ring-black/5 dark:ring-white/10' 
                     : 'text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600'
                 }`}
-                title="Shapes"
+                title={`Shape: ${activeShapeDef.label}`}
             >
-                {/* Dynamically show the selected shape icon or default to Shapes */}
-                {React.createElement(activeShapeIcon, { size: 18 })}
+                {/* Show the last used shape icon */}
+                {React.createElement(activeShapeDef.icon, { size: 18 })}
             </button>
             
             <div className={glassPanelClass}>
@@ -179,6 +247,22 @@ const Toolbar: React.FC<ToolbarProps> = ({
                 </div>
             </div>
         </div>
+
+        {/* Render remaining tools (Arrow, Stamp, Text) */}
+        {mainTools.slice(3).map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTool(t.id as ToolType)}
+            title={t.label}
+            className={`p-1.5 rounded-md transition-all flex items-center justify-center ${
+              currentTool === t.id 
+                ? 'bg-white dark:bg-slate-600 shadow text-brand-600 dark:text-brand-400 ring-1 ring-black/5 dark:ring-white/10' 
+                : 'text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600'
+            }`}
+          >
+            <t.icon size={18} />
+          </button>
+        ))}
 
       </div>
 
@@ -477,6 +561,14 @@ const Toolbar: React.FC<ToolbarProps> = ({
         >
           <Copy size={14} />
           <span className="hidden sm:inline">Copy</span>
+        </button>
+        <button 
+          onClick={onOpenFile}
+          className="flex items-center gap-1.5 px-2 py-1 bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50 rounded-lg font-medium text-xs transition-colors h-8"
+          title="Open File"
+        >
+          <FolderOpen size={14} />
+          <span className="hidden sm:inline">Open</span>
         </button>
         <button 
           onClick={onSave}
