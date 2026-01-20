@@ -10,6 +10,13 @@ import { blobToDataURL, renderCanvas } from './utils/draw';
 const DEFAULT_WIDTH = 800;
 const DEFAULT_HEIGHT = 600;
 
+// Add type definition for the global function called by Java
+declare global {
+  interface Window {
+    handleWebviewPaste?: (base64String: string) => void;
+  }
+}
+
 function App() {
   const [tabCounter, setTabCounter] = useState(1);
   const [darkMode, setDarkMode] = useState(false);
@@ -42,6 +49,55 @@ function App() {
   useEffect(() => {
      if (tabCounter === 1 && tabs.length > 0) setTabCounter(2);
   }, []); 
+
+  // --- Java WebView Integration Hook ---
+  useEffect(() => {
+    // Define the global function expected by the Java wrapper
+    window.handleWebviewPaste = (base64String: string) => {
+      try {
+        // 1. Clean the Base64 string (remove data URI prefix if present)
+        const base64Data = base64String.replace(/^data:image\/\w+;base64,/, '');
+
+        // 2. Convert Base64 to Blob/File
+        const byteCharacters = atob(base64Data);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: 'image/png' });
+        
+        // Create a File object
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const file = new File([blob], `screenshot-${timestamp}.png`, { type: 'image/png' });
+
+        // 3. Find the input element
+        const inputElement = fileInputRef.current;
+        if (inputElement) {
+          // 4. Use DataTransfer to assign the file
+          const dataTransfer = new DataTransfer();
+          dataTransfer.items.add(file);
+          inputElement.files = dataTransfer.files;
+
+          // 5. Dispatch change event to trigger React's handleFileChange
+          const event = new Event('change', { bubbles: true });
+          inputElement.dispatchEvent(event);
+          
+          console.log("WebView paste handled successfully");
+        } else {
+          console.error("File input element not found");
+        }
+      } catch (error) {
+        console.error("Error handling WebView paste:", error);
+      }
+    };
+
+    // Cleanup
+    return () => {
+      // We generally want to keep this available, but good practice to clean up if App unmounts
+      delete window.handleWebviewPaste;
+    };
+  }, []); // Run once on mount
 
   const [activeTabId, setActiveTabId] = useState<string>('1');
   
@@ -513,6 +569,58 @@ function App() {
       }, 50);
   };
 
+  // Screen Capture Logic
+  const handleScreenCapture = async () => {
+    try {
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+            video: {
+                // @ts-ignore
+                cursor: "always"
+            },
+            audio: false
+        });
+
+        const video = document.createElement('video');
+        video.srcObject = stream;
+        video.onloadedmetadata = () => {
+            video.play();
+            // Wait slightly for video to actually start rendering
+            setTimeout(() => {
+                const canvas = document.createElement('canvas');
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                const ctx = canvas.getContext('2d');
+                if (ctx) {
+                    ctx.drawImage(video, 0, 0);
+                    const dataUrl = canvas.toDataURL('image/png');
+                    // Create new tab with captured image
+                    const newId = Date.now().toString();
+                    const autoScale = calculateFitScale(canvas.width, canvas.height);
+                    const newTab: TabData = {
+                        id: newId,
+                        title: `Screen_${String(tabCounter).padStart(3, '0')}`,
+                        imageDataUrl: dataUrl,
+                        elements: [],
+                        history: [[]],
+                        historyIndex: 0,
+                        canvasWidth: canvas.width,
+                        canvasHeight: canvas.height,
+                        scale: autoScale,
+                    };
+                    setTabCounter(prev => prev + 1);
+                    setTabs(prev => [...prev, newTab]);
+                    setActiveTabId(newId);
+                    setActiveTool('select');
+                }
+                // Stop sharing immediately after capture
+                stream.getTracks().forEach(track => track.stop());
+            }, 100);
+        };
+    } catch (err) {
+        console.warn("Screen capture cancelled or failed", err);
+    }
+  };
+
   useEffect(() => {
       const handleKeyDown = (e: KeyboardEvent) => {
           const target = e.target as HTMLElement;
@@ -530,6 +638,10 @@ function App() {
                   e.preventDefault();
                   handleCopy();
               }
+          } else if ((e.altKey) && (e.key === 's' || e.key === 'S')) {
+               // Alt + S for Screenshot
+               e.preventDefault();
+               handleScreenCapture();
           } else if (e.key === 'Delete' || e.key === 'Backspace') {
               if (!isInput) {
                   handleDeleteSelected();
@@ -630,6 +742,7 @@ function App() {
         onSave={handleSave}
         onSaveAll={handleSaveAll}
         onOpenFile={handleOpenFileClick}
+        onScreenCapture={handleScreenCapture}
         onCopy={handleCopy}
         onToggleLock={handleToggleLock}
         onLayerOrder={handleLayerOrder}
@@ -718,6 +831,7 @@ function App() {
 
          <div className="flex gap-3 opacity-75 hidden md:flex text-[10px]">
              <span>Esc: Select</span>
+             <span>Alt+S: Capture</span>
              <span>Del: Delete</span>
              <span>Ctrl+C: Copy</span>
              <span>Ctrl+V: Paste</span>
