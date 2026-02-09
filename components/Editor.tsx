@@ -430,8 +430,29 @@ const Editor: React.FC<EditorProps> = ({
 
     } else {
       // Box based tools
-      const w = pos.x - dragStartPos.x;
-      const h = pos.y - dragStartPos.y;
+      let w = pos.x - dragStartPos.x;
+      let h = pos.y - dragStartPos.y;
+
+      // Shift key constraints (Snapping & Aspect Ratio)
+      if (e.shiftKey) {
+          if (activeTool === 'line' || activeTool === 'arrow') {
+               // Snap to 45 degree increments for lines and arrows
+               const dist = Math.sqrt(w*w + h*h);
+               const angle = Math.atan2(h, w);
+               const snapAngle = Math.round(angle / (Math.PI / 4)) * (Math.PI / 4); 
+               w = Math.cos(snapAngle) * dist;
+               h = Math.sin(snapAngle) * dist;
+               // Clean up floating point errors for perfect verticals/horizontals
+               if (Math.abs(w) < 1e-5) w = 0;
+               if (Math.abs(h) < 1e-5) h = 0;
+          } else if (['rect', 'circle', 'triangle', 'diamond'].includes(activeTool) || (activeTool === 'highlighter' && toolSettings.highlighterStyle === 'rect')) {
+               // 1:1 Aspect Ratio (Square/Circle)
+               const dim = Math.max(Math.abs(w), Math.abs(h));
+               w = w < 0 ? -dim : dim;
+               h = h < 0 ? -dim : dim;
+          }
+      }
+
       setCurrentElement({ 
           ...currentElement, 
           width: w, 
@@ -549,9 +570,23 @@ const Editor: React.FC<EditorProps> = ({
     const isBoxTool = ['rect', 'arrow', 'circle', 'triangle', 'diamond', 'line'].includes(activeTool);
     const isHighlighterRect = activeTool === 'highlighter' && toolSettings.highlighterStyle === 'rect';
     
-    if ((isBoxTool || isHighlighterRect) && (Math.abs(currentElement.width || 0) < 5 || Math.abs(currentElement.height || 0) < 5)) {
-        setCurrentElement(null);
-        return;
+    if (isBoxTool || isHighlighterRect) {
+        const w = Math.abs(currentElement.width || 0);
+        const h = Math.abs(currentElement.height || 0);
+
+        if (activeTool === 'line' || activeTool === 'arrow') {
+             // For lines and arrows, check the length, allowing vertical (w=0) or horizontal (h=0) lines
+             if (Math.sqrt(w * w + h * h) < 5) {
+                 setCurrentElement(null);
+                 return;
+             }
+        } else {
+            // For other shapes, ensure it's not just a tiny dot
+            if (w < 5 && h < 5) {
+                setCurrentElement(null);
+                return;
+            }
+        }
     }
 
     let finalElement = { ...currentElement };

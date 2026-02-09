@@ -386,12 +386,14 @@ function App() {
 
       loadedFiles.forEach((item, index) => {
         const autoScale = calculateFitScale(item.width, item.height);
+        // Remove extension from filename
+        const cleanName = item.file.name.replace(/\.[^/.]+$/, "");
 
         // If it's the first file and the current tab is clean, overwrite current tab
         if (index === 0 && isClean) {
             newTabs = newTabs.map(t => t.id === activeTabId ? {
                 ...t,
-                title: item.file.name,
+                title: cleanName,
                 imageDataUrl: item.dataUrl,
                 canvasWidth: item.width,
                 canvasHeight: item.height,
@@ -403,12 +405,10 @@ function App() {
         } else {
             // Create new tab
             const newId = Date.now().toString() + index; // Ensure unique ID even in tight loop
-            // Try to name duplicate files if needed, but file.name is usually fine.
-            // If user uploads multiple "image.png", tabs will just have same name.
             
             const newTab: TabData = {
                 id: newId,
-                title: item.file.name,
+                title: cleanName,
                 imageDataUrl: item.dataUrl,
                 elements: [],
                 history: [[]],
