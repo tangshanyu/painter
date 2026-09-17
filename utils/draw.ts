@@ -1,5 +1,5 @@
 import React from 'react';
-import { DrawingElement, Point, ArrowStyle, StampStyle } from '../types';
+import { DrawingElement, ArrowStyle, StampStyle } from '../types';
 import { HIGHLIGHTER_OPACITY } from '../constants';
 
 // Helper to load images for the canvas renderer
@@ -65,8 +65,6 @@ const drawArrow = (ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
     const length = Math.sqrt(dx * dx + dy * dy);
 
     const headLength = Math.max(strokeWidth * 3.5, 10); 
-    const headWidth = Math.max(strokeWidth * 2.5, 8); 
-
     const safeLength = Math.max(length, 1);
     const scale = length < headLength ? safeLength / headLength : 1;
     const actualHeadLength = headLength * scale;
@@ -267,7 +265,7 @@ export const renderCanvas = (
   elements: DrawingElement[],
   activeElement: DrawingElement | null, 
   selectedElementId: string | null,
-  scale: number = 1,
+  _scale: number = 1,
   pixelRatio: number = 1 
 ) => {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -286,12 +284,6 @@ export const renderCanvas = (
     const logicalH = canvas.height / pixelRatio;
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, logicalW, logicalH);
-    if (elements.length === 0 && !activeElement) {
-        ctx.fillStyle = '#cbd5e1';
-        ctx.font = '20px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('Paste an image (Ctrl+V) to start', logicalW / 2, logicalH / 2);
-    }
   }
 
   // Draw Elements
@@ -797,7 +789,7 @@ export const getResizeHandleType = (x: number, y: number, el: DrawingElement): R
     return null;
 }
 
-export const getCursorForHandle = (handle: ResizeHandleType, rotation: number = 0) => {
+export const getCursorForHandle = (handle: ResizeHandleType) => {
     switch(handle) {
         case 'n': case 's': return 'ns-resize';
         case 'e': case 'w': return 'ew-resize';

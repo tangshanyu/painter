@@ -1,11 +1,16 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Minus, Plus, Maximize } from 'lucide-react';
+import { Minus, Plus, Maximize, PanelTopOpen } from 'lucide-react';
 import TabList from './components/TabList';
 import Toolbar from './components/Toolbar';
 import Editor from './components/Editor';
+import ExportDialog, { ExportOptions } from './components/ExportDialog';
+import CanvasSpaceDialog, { CanvasEdge } from './components/CanvasSpaceDialog';
 import { TabData, ToolType, ToolSettings, DrawingElement } from './types';
 import { DEFAULT_TOOL_SETTINGS } from './constants';
 import { blobToDataURL, renderCanvas } from './utils/draw';
+import { createDocumentSnapshot, createInitialSnapshot } from './utils/history';
+import { loadWorkspace, saveWorkspace } from './utils/storage';
+import { resizeCanvasDocument } from './utils/canvasResize';
 
 const DEFAULT_WIDTH = 800;
 const DEFAULT_HEIGHT = 600;
@@ -22,6 +27,10 @@ function App() {
   const [darkMode, setDarkMode] = useState(false);
   const [stampCounter, setStampCounter] = useState(1);
   const [clipboardElement, setClipboardElement] = useState<DrawingElement | null>(null);
+  const [workspaceReady, setWorkspaceReady] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading');
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [canvasSpaceDialogOpen, setCanvasSpaceDialogOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
   const [tabs, setTabs] = useState<TabData[]>([
@@ -30,7 +39,7 @@ function App() {
       title: 'Image_001',
       imageDataUrl: null,
       elements: [],
-      history: [[]],
+      history: [createInitialSnapshot(null, DEFAULT_WIDTH, DEFAULT_HEIGHT)],
       historyIndex: 0,
       canvasWidth: DEFAULT_WIDTH,
       canvasHeight: DEFAULT_HEIGHT,
@@ -105,6 +114,60 @@ function App() {
   const [toolSettings, setToolSettings] = useState<ToolSettings>(DEFAULT_TOOL_SETTINGS);
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
 
+  useEffect(() => {
+    let cancelled = false;
+    const restoreWorkspace = async () => {
+      try {
+        const saved = await loadWorkspace();
+        if (cancelled || !saved || saved.version !== 1 || saved.tabs.length === 0) return;
+        setTabs(saved.tabs);
+        setActiveTabId(saved.tabs.some(tab => tab.id === saved.activeTabId) ? saved.activeTabId : saved.tabs[0].id);
+        setTabCounter(saved.tabCounter);
+        setStampCounter(saved.stampCounter);
+        setDarkMode(saved.darkMode);
+        setToolSettings(saved.toolSettings);
+      } catch (error) {
+        console.warn('Unable to restore the local workspace', error);
+      } finally {
+        if (!cancelled) {
+          setWorkspaceReady(true);
+          setSaveStatus('saved');
+        }
+      }
+    };
+    void restoreWorkspace();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!workspaceReady) return;
+    setSaveStatus('saving');
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        const compactTabs = tabs.map(tab => ({
+          ...tab,
+          history: [createDocumentSnapshot(tab)],
+          historyIndex: 0,
+        }));
+        await saveWorkspace({
+          version: 1,
+          savedAt: Date.now(),
+          tabs: compactTabs,
+          activeTabId,
+          tabCounter,
+          stampCounter,
+          darkMode,
+          toolSettings,
+        });
+        setSaveStatus('saved');
+      } catch (error) {
+        console.warn('Unable to save the local workspace', error);
+        setSaveStatus('error');
+      }
+    }, 600);
+    return () => window.clearTimeout(timeoutId);
+  }, [workspaceReady, tabs, activeTabId, tabCounter, stampCounter, darkMode, toolSettings]);
+
   const activeTab = tabs.find(t => t.id === activeTabId) || tabs[0];
 
   const updateTab = useCallback((id: string, updates: Partial<TabData>) => {
@@ -115,14 +178,16 @@ function App() {
       updateTab(id, { title: newTitle });
   };
 
-  const calculateFitScale = (imgW: number, imgH: number) => {
-    const availableW = window.innerWidth - 48; 
-    const availableH = window.innerHeight - 110; 
+  const calculateFitScale = useCallback((imgW: number, imgH: number) => {
+    const editorViewport = document.querySelector<HTMLElement>('[data-editor-viewport]');
+    const viewportRect = editorViewport?.getBoundingClientRect();
+    const availableW = Math.max(100, (viewportRect?.width ?? window.innerWidth) - 64);
+    const availableH = Math.max(100, (viewportRect?.height ?? (window.innerHeight - 110)) - 64);
     if (imgW <= 0 || imgH <= 0) return 1;
     const scaleW = availableW / imgW;
     const scaleH = availableH / imgH;
     return Math.min(scaleW, scaleH, 1);
-  };
+  }, []);
 
   useEffect(() => {
     if (selectedElementId) {
@@ -157,9 +222,9 @@ function App() {
               currentEl.color !== newSettings.color || 
               currentEl.strokeWidth !== newSettings.strokeWidth ||
               currentEl.arrowStyle !== newSettings.arrowStyle
-          )) {
+             )) {
              const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
-             newHistory.push(updatedElements);
+             newHistory.push(createDocumentSnapshot(activeTab, { elements: updatedElements }));
              updateTab(activeTabId, { 
                  elements: updatedElements,
                  history: newHistory,
@@ -179,7 +244,7 @@ function App() {
         });
         
         const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
-        newHistory.push(updatedElements);
+        newHistory.push(createDocumentSnapshot(activeTab, { elements: updatedElements }));
         updateTab(activeTabId, { 
             elements: updatedElements,
             history: newHistory,
@@ -211,7 +276,7 @@ function App() {
       }
 
       const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
-      newHistory.push(newElements);
+      newHistory.push(createDocumentSnapshot(activeTab, { elements: newElements }));
       updateTab(activeTabId, { 
           elements: newElements,
           history: newHistory,
@@ -250,7 +315,12 @@ function App() {
 
       // 3. Update Tab
       const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
-      newHistory.push(newElements); 
+      newHistory.push(createDocumentSnapshot(activeTab, {
+          imageDataUrl: newImageDataUrl,
+          canvasWidth: cropW,
+          canvasHeight: cropH,
+          elements: newElements
+      }));
 
       updateTab(activeTabId, {
           imageDataUrl: newImageDataUrl,
@@ -290,7 +360,7 @@ function App() {
       title: title,
       imageDataUrl: imgData,
       elements: [],
-      history: [[]],
+      history: [createInitialSnapshot(imgData, w, h)],
       historyIndex: 0,
       canvasWidth: w,
       canvasHeight: h,
@@ -322,11 +392,19 @@ function App() {
       img.onload = () => {
           if (!activeTab.imageDataUrl) {
               const autoScale = calculateFitScale(img.width, img.height);
+              const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
+              newHistory.push(createDocumentSnapshot(activeTab, {
+                  imageDataUrl: dataUrl,
+                  canvasWidth: img.width,
+                  canvasHeight: img.height
+              }));
               updateTab(activeTabId, {
                   imageDataUrl: dataUrl,
                   canvasWidth: img.width,
                   canvasHeight: img.height,
-                  scale: autoScale
+                  scale: autoScale,
+                  history: newHistory,
+                  historyIndex: newHistory.length - 1
               });
           } else {
               setActiveTool('select');
@@ -344,7 +422,7 @@ function App() {
               };
               const newElements = [...activeTab.elements, newElement];
               const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
-              newHistory.push(newElements);
+              newHistory.push(createDocumentSnapshot(activeTab, { elements: newElements }));
               updateTab(activeTabId, {
                   elements: newElements,
                   history: newHistory,
@@ -354,6 +432,30 @@ function App() {
           }
       };
   }, [activeTab, activeTabId, updateTab, calculateFitScale, setSelectedElementId]);
+
+  const pasteImageFromSystemClipboard = useCallback(async (): Promise<boolean> => {
+      if (!navigator.clipboard?.read) return false;
+      try {
+          const clipboardItems = await navigator.clipboard.read();
+          for (const item of clipboardItems) {
+              const imageType = item.types.find(type => type.startsWith('image/'));
+              if (!imageType) continue;
+              const blob = await item.getType(imageType);
+              await processImageBlob(blob);
+              return true;
+          }
+      } catch (err) {
+          console.warn('Async clipboard read failed', err);
+      }
+      return false;
+  }, [processImageBlob]);
+
+  const handlePasteImageClick = useCallback(async () => {
+      const didPaste = await pasteImageFromSystemClipboard();
+      if (!didPaste) {
+          alert('No image was found on the clipboard. Copy an image and try again.');
+      }
+  }, [pasteImageFromSystemClipboard]);
 
   const handleOpenFileClick = () => {
     fileInputRef.current?.click();
@@ -399,7 +501,7 @@ function App() {
                 canvasHeight: item.height,
                 scale: autoScale,
                 elements: [],
-                history: [[]],
+                history: [createInitialSnapshot(item.dataUrl, item.width, item.height)],
                 historyIndex: 0
             } : t);
         } else {
@@ -411,7 +513,7 @@ function App() {
                 title: cleanName,
                 imageDataUrl: item.dataUrl,
                 elements: [],
-                history: [[]],
+                history: [createInitialSnapshot(item.dataUrl, item.width, item.height)],
                 historyIndex: 0,
                 canvasWidth: item.width,
                 canvasHeight: item.height,
@@ -454,7 +556,7 @@ function App() {
         }
         const newElements = [...activeTab.elements, newEl];
         const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
-        newHistory.push(newElements);
+        newHistory.push(createDocumentSnapshot(activeTab, { elements: newElements }));
         updateTab(activeTabId, { 
             elements: newElements,
             history: newHistory,
@@ -465,26 +567,7 @@ function App() {
     }
 
     e.preventDefault(); 
-    if (navigator.clipboard && navigator.clipboard.read) {
-        try {
-            const clipboardItems = await navigator.clipboard.read();
-            for (const item of clipboardItems) {
-                if (item.types.includes('image/png')) {
-                    const blob = await item.getType('image/png');
-                    processImageBlob(blob);
-                    return;
-                }
-                const imageType = item.types.find(type => type.startsWith('image/'));
-                if (imageType) {
-                    const blob = await item.getType(imageType);
-                    processImageBlob(blob);
-                    return;
-                }
-            }
-        } catch (err) {
-            console.warn("Async clipboard read failed", err);
-        }
-    }
+    if (await pasteImageFromSystemClipboard()) return;
     if (e.clipboardData && e.clipboardData.items) {
         const items = e.clipboardData.items;
         for (let i = 0; i < items.length; i++) {
@@ -497,7 +580,7 @@ function App() {
             }
         }
     }
-  }, [clipboardElement, processImageBlob, activeTab.elements, activeTab.history, activeTab.historyIndex, activeTabId, updateTab]);
+  }, [clipboardElement, pasteImageFromSystemClipboard, processImageBlob, activeTab.elements, activeTab.history, activeTab.historyIndex, activeTabId, updateTab]);
 
   useEffect(() => {
     window.addEventListener('paste', handlePaste);
@@ -507,9 +590,13 @@ function App() {
   const performUndo = useCallback(() => {
     if (activeTab.historyIndex > 0) {
       const newIndex = activeTab.historyIndex - 1;
+      const snapshot = activeTab.history[newIndex];
       updateTab(activeTabId, {
         historyIndex: newIndex,
-        elements: activeTab.history[newIndex]
+        elements: snapshot.elements,
+        imageDataUrl: snapshot.imageDataUrl,
+        canvasWidth: snapshot.canvasWidth,
+        canvasHeight: snapshot.canvasHeight
       });
       setSelectedElementId(null);
     }
@@ -518,9 +605,13 @@ function App() {
   const performRedo = useCallback(() => {
     if (activeTab.historyIndex < activeTab.history.length - 1) {
       const newIndex = activeTab.historyIndex + 1;
+      const snapshot = activeTab.history[newIndex];
       updateTab(activeTabId, {
         historyIndex: newIndex,
-        elements: activeTab.history[newIndex]
+        elements: snapshot.elements,
+        imageDataUrl: snapshot.imageDataUrl,
+        canvasWidth: snapshot.canvasWidth,
+        canvasHeight: snapshot.canvasHeight
       });
       setSelectedElementId(null);
     }
@@ -530,7 +621,7 @@ function App() {
       if (selectedElementId) {
           const newElements = activeTab.elements.filter(el => el.id !== selectedElementId);
           const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
-          newHistory.push(newElements);
+          newHistory.push(createDocumentSnapshot(activeTab, { elements: newElements }));
           updateTab(activeTabId, {
               elements: newElements,
               history: newHistory,
@@ -601,7 +692,7 @@ function App() {
                         title: `Screen_${String(tabCounter).padStart(3, '0')}`,
                         imageDataUrl: dataUrl,
                         elements: [],
-                        history: [[]],
+                        history: [createInitialSnapshot(dataUrl, canvas.width, canvas.height)],
                         historyIndex: 0,
                         canvasWidth: canvas.width,
                         canvasHeight: canvas.height,
@@ -658,7 +749,7 @@ function App() {
   const handleClearAll = () => {
       if (window.confirm('Clear all drawings and layers? (Background image will remain)')) {
           const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
-          newHistory.push([]); 
+          newHistory.push(createDocumentSnapshot(activeTab, { elements: [] }));
           updateTab(activeTabId, {
               elements: [],
               history: newHistory,
@@ -670,49 +761,85 @@ function App() {
 
   const handleSave = () => {
     setSelectedElementId(null);
-    setTimeout(() => {
-        const canvas = document.querySelector('canvas');
-        if (canvas) {
-            const link = document.createElement('a');
-            link.download = `${activeTab.title}.png`;
-            link.href = canvas.toDataURL('image/png');
-            link.click();
-        }
-    }, 50);
+    setExportDialogOpen(true);
+  };
+
+  const renderTabForExport = async (tab: TabData, options: ExportOptions) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(tab.canvasWidth * options.scale));
+    canvas.height = Math.max(1, Math.round(tab.canvasHeight * options.scale));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Unable to create an export canvas');
+
+    let bgImg: HTMLImageElement | null = null;
+    if (tab.imageDataUrl) {
+      bgImg = await new Promise<HTMLImageElement | null>((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => resolve(null);
+        img.src = tab.imageDataUrl!;
+      });
+    }
+    renderCanvas(canvas, ctx, bgImg, tab.elements, null, null, 1, options.scale);
+    const mimeType = options.format === 'jpeg' ? 'image/jpeg' : 'image/png';
+    return canvas.toDataURL(mimeType, options.format === 'jpeg' ? options.quality : undefined);
+  };
+
+  const downloadDataUrl = (dataUrl: string, filename: string) => {
+    const link = document.createElement('a');
+    link.download = filename;
+    link.href = dataUrl;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleExport = async (options: ExportOptions) => {
+    const dataUrl = await renderTabForExport(activeTab, options);
+    const extension = options.format === 'jpeg' ? 'jpg' : 'png';
+    downloadDataUrl(dataUrl, `${activeTab.title}.${extension}`);
   };
 
   const handleSaveAll = async () => {
     setSelectedElementId(null);
-    const dpr = window.devicePixelRatio || 1;
     for (let i = 0; i < tabs.length; i++) {
         const t = tabs[i];
-        const canvas = document.createElement('canvas');
-        canvas.width = t.canvasWidth * dpr;
-        canvas.height = t.canvasHeight * dpr;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) continue;
-        let bgImg: HTMLImageElement | null = null;
-        if (t.imageDataUrl) {
-            await new Promise<void>((resolve) => {
-                const img = new Image();
-                img.onload = () => { bgImg = img; resolve(); };
-                img.onerror = () => resolve(); 
-                img.src = t.imageDataUrl!;
-            });
-        }
-        renderCanvas(canvas, ctx, bgImg, t.elements, null, null, 1, dpr);
-        const link = document.createElement('a');
-        link.download = `${t.title}.png`;
-        link.href = canvas.toDataURL('image/png');
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+        const dataUrl = await renderTabForExport(t, { format: 'png', scale: 1, quality: 1 });
+        downloadDataUrl(dataUrl, `${t.title}.png`);
         await new Promise(resolve => setTimeout(resolve, 300));
     }
   };
 
   const setScale = (newScale: number) => {
       updateTab(activeTabId, { scale: newScale });
+  };
+
+  const commitCanvasDimensions = () => {
+      const currentSnapshot = activeTab.history[activeTab.historyIndex];
+      if (
+          currentSnapshot.canvasWidth === activeTab.canvasWidth &&
+          currentSnapshot.canvasHeight === activeTab.canvasHeight
+      ) return;
+      const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
+      newHistory.push(createDocumentSnapshot(activeTab));
+      updateTab(activeTabId, { history: newHistory, historyIndex: newHistory.length - 1 });
+  };
+
+  const handleAddCanvasSpace = async (edge: CanvasEdge, amount: number) => {
+      const addX = edge === 'left' ? amount : 0;
+      const addY = edge === 'top' ? amount : 0;
+      const nextWidth = activeTab.canvasWidth + (edge === 'left' || edge === 'right' ? amount : 0);
+      const nextHeight = activeTab.canvasHeight + (edge === 'top' || edge === 'bottom' ? amount : 0);
+      const resized = await resizeCanvasDocument(activeTab, nextWidth, nextHeight, addX, addY);
+      const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
+      newHistory.push(createDocumentSnapshot(activeTab, resized));
+      updateTab(activeTabId, {
+          ...resized,
+          scale: calculateFitScale(resized.canvasWidth, resized.canvasHeight),
+          history: newHistory,
+          historyIndex: newHistory.length - 1,
+      });
+      setSelectedElementId(null);
   };
 
   return (
@@ -772,6 +899,11 @@ function App() {
         stampCounter={stampCounter}
         onStamp={() => setStampCounter(c => c + 1)}
         onCrop={handleCrop}
+        onOpenFile={handleOpenFileClick}
+        onPasteImage={handlePasteImageClick}
+        onScreenCapture={handleScreenCapture}
+        onImageDrop={processImageBlob}
+        onAddCanvasSpace={handleAddCanvasSpace}
       />
       
       <div className="bg-brand-50 dark:bg-slate-800 border-t border-brand-100 dark:border-slate-700 px-3 py-1 text-xs text-brand-800 dark:text-brand-300 flex justify-between items-center select-none font-medium z-10 h-7 transition-colors">
@@ -780,6 +912,7 @@ function App() {
                 type="number" 
                 value={activeTab.canvasWidth} 
                 onChange={(e) => updateTab(activeTabId, { canvasWidth: parseInt(e.target.value) || 100 })}
+                onBlur={commitCanvasDimensions}
                 className="w-[3.5rem] bg-transparent text-right hover:bg-white/50 dark:hover:bg-slate-700 focus:bg-white dark:focus:bg-slate-700 focus:outline-none rounded px-0.5"
              />
              <span className="opacity-80">x</span>
@@ -787,9 +920,18 @@ function App() {
                 type="number" 
                 value={activeTab.canvasHeight} 
                 onChange={(e) => updateTab(activeTabId, { canvasHeight: parseInt(e.target.value) || 100 })}
+                onBlur={commitCanvasDimensions}
                 className="w-[3.5rem] bg-transparent text-left hover:bg-white/50 dark:hover:bg-slate-700 focus:bg-white dark:focus:bg-slate-700 focus:outline-none rounded px-0.5"
              />
              <span className="opacity-80 ml-1">px</span>
+             <button
+                type="button"
+                onClick={() => setCanvasSpaceDialogOpen(true)}
+                className="ml-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-brand-700 hover:bg-brand-100 dark:text-brand-300 dark:hover:bg-slate-700"
+                title="Add blank space around the canvas"
+             >
+                <PanelTopOpen size={11} /> Add space
+             </button>
          </div>
 
          <div className="flex items-center gap-2">
@@ -829,6 +971,10 @@ function App() {
             </div>
          </div>
 
+         <div className={`text-[10px] ${saveStatus === 'error' ? 'text-red-500' : 'opacity-70'}`} title="Workspace is automatically stored in this browser">
+             {saveStatus === 'loading' ? 'Restoring…' : saveStatus === 'saving' ? 'Saving…' : saveStatus === 'error' ? 'Save failed' : 'Saved locally'}
+         </div>
+
          <div className="flex gap-3 opacity-75 hidden md:flex text-[10px]">
              <span>Esc: Select</span>
              <span>Alt+S: Capture</span>
@@ -837,6 +983,20 @@ function App() {
              <span>Ctrl+V: Paste</span>
          </div>
       </div>
+
+      <ExportDialog
+        isOpen={exportDialogOpen}
+        title={activeTab.title}
+        width={activeTab.canvasWidth}
+        height={activeTab.canvasHeight}
+        onClose={() => setExportDialogOpen(false)}
+        onExport={handleExport}
+      />
+      <CanvasSpaceDialog
+        isOpen={canvasSpaceDialogOpen}
+        onClose={() => setCanvasSpaceDialogOpen(false)}
+        onApply={handleAddCanvasSpace}
+      />
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   MousePointer2, 
   Pen, 
@@ -25,16 +25,14 @@ import {
   SendToBack,
   ChevronUp,
   ChevronDown,
-  Palette,
   Circle,
   FileX,
-  Shapes,
   Diamond,
   Minus,
   Droplets,
   Brush,
-  Ban,
-  FolderOpen
+  FolderOpen,
+  MonitorUp
 } from 'lucide-react';
 import { ToolType, ToolSettings, DrawingElement } from '../types';
 import { COLORS } from '../constants';
@@ -53,6 +51,7 @@ interface ToolbarProps {
   onSave: () => void;
   onSaveAll: () => void;
   onOpenFile: () => void;
+  onScreenCapture: () => void;
   onCopy: () => void;
   onDeleteSelected: () => void;
   onClearAll: () => void;
@@ -78,6 +77,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
   onSave,
   onSaveAll,
   onOpenFile,
+  onScreenCapture,
   onCopy,
   onDeleteSelected,
   onClearAll,
@@ -88,6 +88,32 @@ const Toolbar: React.FC<ToolbarProps> = ({
   stampCounter,
   setStampCounter
 }) => {
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const [openPopover, setOpenPopover] = useState<'draw' | 'shape' | 'color' | 'size' | null>(null);
+
+  useEffect(() => {
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!toolbarRef.current?.contains(event.target as Node)) setOpenPopover(null);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpenPopover(null);
+    };
+    document.addEventListener('pointerdown', closeOnOutsideClick);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, []);
+
+  const selectTool = (tool: ToolType) => {
+    setTool(tool);
+    setOpenPopover(null);
+  };
+
+  const togglePopover = (popover: 'draw' | 'shape' | 'color' | 'size') => {
+    setOpenPopover(current => current === popover ? null : popover);
+  };
   
   // Tools that appear directly on the bar (Standalone)
   const mainTools = [
@@ -152,10 +178,10 @@ const Toolbar: React.FC<ToolbarProps> = ({
   ];
 
   // Glass panel style
-  const glassPanelClass = "absolute top-full mt-3 left-1/2 -translate-x-1/2 p-3 rounded-2xl backdrop-blur-xl bg-white/70 dark:bg-slate-800/80 border border-white/50 dark:border-slate-600/50 shadow-2xl ring-1 ring-black/5 flex flex-wrap gap-2 min-w-[180px] justify-center z-50 transition-all duration-300 transform origin-top scale-90 opacity-0 invisible group-hover:visible group-hover:opacity-100 group-hover:scale-100 group-hover:translate-y-0 translate-y-2";
+  const glassPanelClass = "absolute top-full mt-2 left-1/2 -translate-x-1/2 p-3 rounded-2xl backdrop-blur-xl bg-white/90 dark:bg-slate-800/95 border border-white/50 dark:border-slate-600/50 shadow-2xl ring-1 ring-black/5 flex flex-wrap gap-2 min-w-[180px] justify-center z-50";
 
   return (
-    <div className="w-full bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 p-1 flex items-center gap-1.5 shadow-sm z-50 sticky top-0 transition-colors h-12 overflow-visible">
+    <div ref={toolbarRef} className="w-full bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 px-2 py-1 flex flex-wrap items-center gap-1.5 shadow-sm z-50 sticky top-0 transition-colors min-h-12 overflow-visible">
       
       {/* Tools Group */}
       <div className="flex bg-slate-100 dark:bg-slate-700 p-0.5 rounded-lg gap-0.5 shrink-0">
@@ -164,7 +190,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
         {mainTools.slice(0, 3).map((t) => (
           <button
             key={t.id}
-            onClick={() => setTool(t.id as ToolType)}
+            onClick={() => selectTool(t.id as ToolType)}
             title={t.label}
             className={`p-1.5 rounded-md transition-all flex items-center justify-center ${
               currentTool === t.id 
@@ -177,9 +203,13 @@ const Toolbar: React.FC<ToolbarProps> = ({
         ))}
 
         {/* Drawing Tools Group (Pen, Highlighter, Pixelate) */}
-        <div className="relative group">
+        <div className="relative">
             <button
-                onClick={() => setTool(lastDrawTool)}
+                onClick={() => {
+                  setTool(lastDrawTool);
+                  togglePopover('draw');
+                }}
+                aria-expanded={openPopover === 'draw'}
                 className={`p-1.5 rounded-md transition-all flex items-center justify-center ${
                 isDrawActive
                     ? 'bg-white dark:bg-slate-600 shadow text-brand-600 dark:text-brand-400 ring-1 ring-black/5 dark:ring-white/10' 
@@ -191,13 +221,13 @@ const Toolbar: React.FC<ToolbarProps> = ({
                 {React.createElement(activeDrawDef.icon, { size: 18 })}
             </button>
             
-            <div className={glassPanelClass}>
+            {openPopover === 'draw' && <div className={glassPanelClass}>
                 <div className="w-full text-xs text-center font-medium text-slate-500 dark:text-slate-300 mb-1">Brushes & Effects</div>
                 <div className="flex items-center gap-2">
                     {drawTools.map((t) => (
                          <button
                             key={t.id}
-                            onClick={() => setTool(t.id as ToolType)}
+                            onClick={() => selectTool(t.id as ToolType)}
                             title={t.label}
                             className={`p-2 rounded-lg transition-all flex items-center justify-center ${
                             currentTool === t.id 
@@ -209,13 +239,17 @@ const Toolbar: React.FC<ToolbarProps> = ({
                         </button>
                     ))}
                 </div>
-            </div>
+            </div>}
         </div>
 
         {/* Shapes Group */}
-        <div className="relative group">
+        <div className="relative">
             <button
-                onClick={() => setTool(lastShape)}
+                onClick={() => {
+                  setTool(lastShape);
+                  togglePopover('shape');
+                }}
+                aria-expanded={openPopover === 'shape'}
                 className={`p-1.5 rounded-md transition-all flex items-center justify-center ${
                 isShapeActive
                     ? 'bg-white dark:bg-slate-600 shadow text-brand-600 dark:text-brand-400 ring-1 ring-black/5 dark:ring-white/10' 
@@ -227,13 +261,13 @@ const Toolbar: React.FC<ToolbarProps> = ({
                 {React.createElement(activeShapeDef.icon, { size: 18 })}
             </button>
             
-            <div className={glassPanelClass}>
+            {openPopover === 'shape' && <div className={glassPanelClass}>
                 <div className="w-full text-xs text-center font-medium text-slate-500 dark:text-slate-300 mb-1">Geometric Shapes</div>
                 <div className="flex items-center gap-2">
                     {shapeTools.map((t) => (
                          <button
                             key={t.id}
-                            onClick={() => setTool(t.id as ToolType)}
+                            onClick={() => selectTool(t.id as ToolType)}
                             title={t.label}
                             className={`p-2 rounded-lg transition-all flex items-center justify-center ${
                             currentTool === t.id 
@@ -245,14 +279,14 @@ const Toolbar: React.FC<ToolbarProps> = ({
                         </button>
                     ))}
                 </div>
-            </div>
+            </div>}
         </div>
 
         {/* Render remaining tools (Arrow, Stamp, Text) */}
         {mainTools.slice(3).map((t) => (
           <button
             key={t.id}
-            onClick={() => setTool(t.id as ToolType)}
+            onClick={() => selectTool(t.id as ToolType)}
             title={t.label}
             className={`p-1.5 rounded-md transition-all flex items-center justify-center ${
               currentTool === t.id 
@@ -269,20 +303,25 @@ const Toolbar: React.FC<ToolbarProps> = ({
       <div className="w-px h-6 bg-slate-300 dark:bg-slate-600 mx-1 shrink-0"></div>
 
       {/* Color Picker (Liquid Glass Popover) */}
-      <div className="relative group shrink-0">
+      <div className="relative shrink-0">
           <button 
+              onClick={() => togglePopover('color')}
+              aria-expanded={openPopover === 'color'}
               className="w-8 h-8 rounded-lg border border-slate-200 dark:border-slate-600 flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
               title="Color Settings"
           >
               <div className="w-5 h-5 rounded-full shadow-sm ring-1 ring-black/10" style={{ backgroundColor: settings.color }}></div>
           </button>
           
-          <div className={glassPanelClass}>
+          {openPopover === 'color' && <div className={glassPanelClass}>
               <div className="w-full text-xs text-center font-medium text-slate-500 dark:text-slate-300 mb-1">Color Palette</div>
                {COLORS.map((c) => (
                 <button
                     key={c}
-                    onClick={() => setSettings({ ...settings, color: c })}
+                    onClick={() => {
+                      setSettings({ ...settings, color: c });
+                      setOpenPopover(null);
+                    }}
                     className={`w-6 h-6 rounded-full border border-slate-200 dark:border-slate-600 transition-transform hover:scale-110 shadow-sm ${
                     settings.color === c ? 'ring-2 ring-brand-500 scale-110' : ''
                     }`}
@@ -301,12 +340,14 @@ const Toolbar: React.FC<ToolbarProps> = ({
                         title="Custom Color"
                     />
                 </div>
-          </div>
+          </div>}
       </div>
 
       {/* Size Picker (Liquid Glass Popover) */}
-      <div className="relative group shrink-0">
+      <div className="relative shrink-0">
           <button 
+              onClick={() => togglePopover('size')}
+              aria-expanded={openPopover === 'size'}
               className="w-8 h-8 rounded-lg border border-slate-200 dark:border-slate-600 flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors text-slate-600 dark:text-slate-300"
               title="Size / Stroke Width"
           >
@@ -323,7 +364,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
              )}
           </button>
 
-          <div className={glassPanelClass}>
+          {openPopover === 'size' && <div className={glassPanelClass}>
               <div className="w-full text-xs text-center font-medium text-slate-500 dark:text-slate-300 mb-1">
                   {currentTool === 'text' ? 'Font Size' : 'Stroke Width'}
               </div>
@@ -333,7 +374,10 @@ const Toolbar: React.FC<ToolbarProps> = ({
                        {TEXT_SIZES.map(s => (
                            <button
                                 key={s.value}
-                                onClick={() => setSettings({ ...settings, strokeWidth: s.value })}
+                                onClick={() => {
+                                  setSettings({ ...settings, strokeWidth: s.value });
+                                  setOpenPopover(null);
+                                }}
                                 className={`px-2 py-1 text-xs rounded hover:bg-slate-200 dark:hover:bg-slate-600 text-left ${
                                     settings.strokeWidth === s.value ? 'bg-brand-100 dark:bg-brand-900/30 text-brand-700 dark:text-brand-300 font-bold' : 'text-slate-700 dark:text-slate-200'
                                 }`}
@@ -347,7 +391,10 @@ const Toolbar: React.FC<ToolbarProps> = ({
                        {DOT_SIZES.map((size) => (
                         <button
                             key={size}
-                            onClick={() => setSettings({ ...settings, strokeWidth: size })}
+                            onClick={() => {
+                              setSettings({ ...settings, strokeWidth: size });
+                              setOpenPopover(null);
+                            }}
                             className={`w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/50 dark:hover:bg-slate-600/50 transition-colors ${settings.strokeWidth === size ? 'bg-slate-200 dark:bg-slate-600 ring-1 ring-slate-400' : ''}`}
                             title={`${size}px`}
                         >
@@ -362,7 +409,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
                         ))}
                    </div>
               )}
-          </div>
+          </div>}
       </div>
 
       {/* Contextual Inline Tools (Keep these accessible) */}
@@ -518,7 +565,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
         </button>
       </div>
 
-      <div className="flex-grow"></div>
+      <div className="hidden lg:block flex-grow"></div>
 
       {/* Layer Actions */}
       {hasSelection && (
@@ -553,6 +600,15 @@ const Toolbar: React.FC<ToolbarProps> = ({
         </button>
 
         <div className="w-px h-6 bg-slate-300 dark:bg-slate-600 mx-1 hidden sm:block"></div>
+
+        <button
+          onClick={onScreenCapture}
+          className="flex items-center gap-1.5 px-2 py-1 bg-sky-50 dark:bg-sky-900/30 text-sky-700 dark:text-sky-300 hover:bg-sky-100 dark:hover:bg-sky-900/50 rounded-lg font-medium text-xs transition-colors h-8"
+          title="Capture Screen (Alt+S)"
+        >
+          <MonitorUp size={14} />
+          <span className="hidden sm:inline">Capture</span>
+        </button>
 
         <button 
           onClick={onCopy}

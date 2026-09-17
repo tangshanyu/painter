@@ -32,12 +32,19 @@ export interface DrawingElement {
   locked?: boolean; // if true, cannot be moved or resized
 }
 
+export interface DocumentSnapshot {
+  elements: DrawingElement[];
+  imageDataUrl: string | null;
+  canvasWidth: number;
+  canvasHeight: number;
+}
+
 export interface TabData {
   id: string;
   title: string;
   imageDataUrl: string | null; // The background base image
   elements: DrawingElement[]; // The vector layers on top
-  history: DrawingElement[][]; // Undo stack
+  history: DocumentSnapshot[]; // Undo stack for the complete document state
   historyIndex: number; // Current position in undo stack
   canvasWidth: number;
   canvasHeight: number;
