@@ -231,6 +231,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
           : sizeTarget === 'highlighter'
             ? 'Highlighter width'
             : 'Stroke width';
+  const sizeContextLabel = selectedElement ? `Selected ${sizeLabel.toLowerCase()}` : `Next ${sizeLabel.toLowerCase()}`;
   const contextualTool = selectedElement?.type ?? currentTool;
   const stampStyles: Array<{ id: StampStyle; label: string }> = [
     { id: 'circle', label: 'Circle stamp' },
@@ -548,7 +549,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
               aria-expanded={openPopover === 'size'}
               aria-label={`${sizeLabel}: ${currentSize}px`}
               className="h-8 min-w-[3.5rem] rounded-lg border border-slate-200 px-2 dark:border-slate-600 flex items-center justify-center gap-1.5 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors text-slate-600 dark:text-slate-300"
-              title={`${sizeLabel}: ${currentSize}px · remembered for this tool`}
+              title={`${sizeContextLabel}: ${currentSize}px`}
           >
              {isTextSize ? (
                   <Type size={16} />
@@ -566,7 +567,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
 
           {openPopover === 'size' && <div className={glassPanelClass}>
               <div className="w-full text-xs text-center font-medium text-slate-500 dark:text-slate-300 mb-1">
-                  {sizeLabel} · saved for this tool
+                  {sizeContextLabel} · {currentSize}px
               </div>
 
               {isTextSize ? (

@@ -1,0 +1,45 @@
+.editor-statusbar {
+  position: relative;
+  z-index: 40;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  height: 36px;
+  flex-shrink: 0;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 500;
+  user-select: none;
+}
+
+.editor-statusbar-dimensions,
+.editor-statusbar-zoom,
+.editor-statusbar-actions {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  white-space: nowrap;
+}
+.editor-statusbar-dimensions { gap: 4px; }
+.editor-statusbar-zoom { gap: 8px; }
+.editor-statusbar-actions { justify-content: flex-end; gap: 12px; }
+.editor-statusbar-dimension { flex: 0 0 auto; width: 48px; }
+.editor-statusbar-save { overflow: hidden; text-overflow: ellipsis; }
+
+@media (max-width: 767px) {
+  .editor-statusbar { grid-template-columns: auto auto minmax(0, 1fr); padding: 0 8px; gap: 8px; }
+  .editor-statusbar-save { display: none; }
+}
+
+@media (max-width: 599px) {
+  .editor-statusbar-add-label,
+  .editor-statusbar-zoom-slider { display: none; }
+}
+
+@media (max-width: 399px) {
+  .editor-statusbar { gap: 6px; }
+  .editor-statusbar-unit { display: none; }
+  .editor-statusbar-dimension { width: 36px; }
+  .editor-statusbar-zoom { gap: 4px; }
+}

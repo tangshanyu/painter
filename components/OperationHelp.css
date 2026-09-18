@@ -1,0 +1,153 @@
+.operation-help {
+  position: relative;
+  flex: 0 0 auto;
+  --help-bg: #fff;
+  --help-muted-bg: #f8fafc;
+  --help-border: #e2e8f0;
+  --help-text: #334155;
+  --help-muted: #64748b;
+  --help-accent: #0369a1;
+  --help-accent-bg: #e0f2fe;
+  color: var(--help-text);
+}
+
+.dark .operation-help {
+  --help-bg: #1e293b;
+  --help-muted-bg: #0f172a;
+  --help-border: #475569;
+  --help-text: #e2e8f0;
+  --help-muted: #94a3b8;
+  --help-accent: #7dd3fc;
+  --help-accent-bg: #164e63;
+}
+
+.operation-help-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--help-border);
+  border-radius: 6px;
+  background: var(--help-bg);
+  color: var(--help-accent);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.operation-help-trigger:hover,
+.operation-help-trigger[aria-expanded='true'] {
+  background: var(--help-accent-bg);
+  border-color: var(--help-accent);
+}
+
+.operation-help :focus-visible {
+  outline: 2px solid #0ea5e9;
+  outline-offset: 2px;
+}
+
+/* The padded bridge keeps hover active while moving from the button to the panel. */
+.operation-help-positioner {
+  position: absolute;
+  z-index: 60;
+  bottom: 100%;
+  right: 0;
+  width: min(440px, calc(100vw - 24px));
+  padding-bottom: 8px;
+  white-space: normal;
+}
+
+.operation-help-panel {
+  display: flex;
+  flex-direction: column;
+  max-height: min(680px, calc(100dvh - 64px));
+  overflow: hidden;
+  border: 1px solid var(--help-border);
+  border-radius: 12px;
+  background: var(--help-bg);
+  box-shadow: 0 12px 38px rgb(15 23 42 / 20%);
+  text-align: left;
+}
+
+.operation-help-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--help-border);
+  background: var(--help-muted-bg);
+}
+
+.operation-help-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  color: var(--help-accent);
+  background: var(--help-accent-bg);
+}
+
+.operation-help-header h2 { margin: 0; font-size: 14px; font-weight: 650; }
+.operation-help-header p { margin: 3px 0 0; font-size: 11px; color: var(--help-muted); }
+.operation-help-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-left: auto;
+  border-radius: 6px;
+  color: var(--help-muted);
+  cursor: pointer;
+}
+.operation-help-close:hover { background: var(--help-border); }
+
+.operation-help-content {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 16px 14px;
+  scrollbar-width: thin;
+  scrollbar-color: #94a3b8 transparent;
+}
+
+.operation-help-section { padding: 12px 0 8px; }
+.operation-help-section + .operation-help-section { border-top: 1px solid var(--help-border); }
+.operation-help-section h3 { margin: 0 0 6px; color: var(--help-accent); font-size: 11px; font-weight: 650; }
+.operation-help-section dl { margin: 0; }
+.operation-help-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 7px 0;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+.operation-help-row dt { min-width: 0; overflow-wrap: anywhere; }
+.operation-help-row dd { display: flex; align-items: center; justify-content: flex-end; gap: 3px; margin: 0; }
+.operation-help-detail { display: block; margin-top: 2px; color: var(--help-muted); font-size: 11px; }
+.operation-help-plus { color: var(--help-muted); font-size: 10px; }
+.operation-help-row kbd {
+  padding: 3px 5px;
+  border: 1px solid var(--help-border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--help-muted-bg);
+  color: var(--help-text);
+  font: 11px/1.2 ui-monospace, monospace;
+  white-space: nowrap;
+}
+.operation-help-note { margin: 8px 0 0; color: var(--help-muted); font-size: 11px; line-height: 1.65; }
+
+@media (max-width: 380px) {
+  .operation-help-row { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .operation-help-row dd { justify-content: flex-start; }
+}

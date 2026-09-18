@@ -5,6 +5,8 @@ import Toolbar from './components/Toolbar';
 import Editor from './components/Editor';
 import LayerPanel from './components/LayerPanel';
 import PropertiesPanel from './components/PropertiesPanel';
+import OperationHelp from './components/OperationHelp';
+import './components/StatusBar.css';
 import ExportDialog, { ExportOptions } from './components/ExportDialog';
 import CanvasSpaceDialog, { CanvasEdge } from './components/CanvasSpaceDialog';
 import { TabData, ToolType, ToolSettings, DrawingElement } from './types';
@@ -22,6 +24,7 @@ const normalizeStampSize = (size: number | undefined) => {
   return size < 20 ? (10 + size) * 2 : size;
 };
 const getStampDiameter = (element: DrawingElement) => element.stampSize ?? (10 + element.strokeWidth) * 2;
+const INTERNAL_CLIPBOARD_MARKER = 'webpicpick://internal-elements';
 
 // Add type definition for the global function called by Java
 declare global {
@@ -238,8 +241,17 @@ function App() {
                 highlighterStyle: el.highlighterStyle ?? prev.highlighterStyle,
             }));
         }
+    } else {
+        setToolSettings(prev => {
+            const rememberedSize = prev.toolSizes?.[activeTool] ?? DEFAULT_TOOL_SIZES[activeTool];
+            if (rememberedSize === undefined) return prev;
+            if (activeTool === 'text' || activeTool === 'callout') {
+                return prev.fontSize === rememberedSize ? prev : { ...prev, fontSize: rememberedSize };
+            }
+            return prev.strokeWidth === rememberedSize ? prev : { ...prev, strokeWidth: rememberedSize };
+        });
     }
-  }, [selectedElementId, activeTab.elements]);
+  }, [selectedElementId, activeTab.elements, activeTool]);
 
   const handleToolSettingsChange = (newSettings: ToolSettings) => {
       const selectedElement = selectedElementId
@@ -249,7 +261,8 @@ function App() {
           ? selectedElement.type
           : activeTool;
       const activeToolSize = sizeOwner === 'text' || sizeOwner === 'callout' ? newSettings.fontSize : newSettings.strokeWidth;
-      const shouldRememberSize = DEFAULT_TOOL_SIZES[sizeOwner] !== undefined;
+      // Editing a selected object must not silently change the size of the next object.
+      const shouldRememberSize = !selectedElement && DEFAULT_TOOL_SIZES[sizeOwner] !== undefined;
       const nextSettings = shouldRememberSize
           ? {
               ...newSettings,
@@ -450,6 +463,25 @@ function App() {
           return updated;
       });
       commitElements(updatedElements);
+  };
+
+  const handleSelectedStylePreview = (values: Partial<DrawingElement>) => {
+      if (selectedElementIds.length === 0) return;
+      const updatedElements = activeTab.elements.map(element => {
+          if (!selectedElementIds.includes(element.id) || element.locked) return element;
+          const updated = { ...element, ...values };
+          if (element.type === 'stamp' && values.strokeWidth !== undefined) updated.stampSize = values.strokeWidth;
+          return updated;
+      });
+      updateTab(activeTabId, { elements: updatedElements });
+  };
+
+  const commitStylePreview = () => {
+      const currentSnapshot = activeTab.history[activeTab.historyIndex];
+      if (JSON.stringify(currentSnapshot?.elements) === JSON.stringify(activeTab.elements)) return;
+      const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
+      newHistory.push(createDocumentSnapshot(activeTab));
+      updateTab(activeTabId, { history: newHistory, historyIndex: newHistory.length - 1 });
   };
 
   const handleAlignSelection = (action: 'left' | 'centerX' | 'right' | 'top' | 'centerY' | 'bottom') => {
@@ -784,8 +816,18 @@ function App() {
     const target = e.target as HTMLElement;
     if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
 
-    if (clipboardElements.length > 0) {
-        e.preventDefault();
+    e.preventDefault();
+
+    const clipboardItems = Array.from(e.clipboardData?.items ?? []);
+    const pastedImage = clipboardItems.find(item => item.type.startsWith('image/'))?.getAsFile();
+    if (pastedImage) {
+        await processImageBlob(pastedImage);
+        return;
+    }
+
+    const clipboardText = e.clipboardData?.getData('text/plain') ?? '';
+    const pasteInternalElements = () => {
+      if (clipboardElements.length > 0) {
         const offset = 20;
         const timestamp = Date.now();
         const pastedElements = clipboardElements.map((element, index) => ({
@@ -805,23 +847,17 @@ function App() {
             historyIndex: newHistory.length - 1
         });
         setSelectedElementIds(pastedElements.map(element => element.id));
+        return true;
+      }
+      return false;
+    };
+
+    if (clipboardText.startsWith(INTERNAL_CLIPBOARD_MARKER) && pasteInternalElements()) {
         return;
     }
 
-    e.preventDefault(); 
     if (await pasteImageFromSystemClipboard()) return;
-    if (e.clipboardData && e.clipboardData.items) {
-        const items = e.clipboardData.items;
-        for (let i = 0; i < items.length; i++) {
-            if (items[i].type.indexOf('image') !== -1) {
-                const blob = items[i].getAsFile();
-                if (blob) {
-                    processImageBlob(blob);
-                    return;
-                }
-            }
-        }
-    }
+    pasteInternalElements();
   }, [clipboardElements, pasteImageFromSystemClipboard, processImageBlob, activeTab.elements, activeTab.history, activeTab.historyIndex, activeTabId, updateTab]);
 
   useEffect(() => {
@@ -876,6 +912,11 @@ function App() {
   const handleCopy = async () => {
       if (selectedElementIds.length > 0) {
           setClipboardElements(activeTab.elements.filter(element => selectedElementIds.includes(element.id)));
+          try {
+              await navigator.clipboard?.writeText(`${INTERNAL_CLIPBOARD_MARKER}/${Date.now()}`);
+          } catch (error) {
+              console.warn('Unable to mark the internal clipboard', error);
+          }
           return;
       }
       setSelectedElementId(null);
@@ -956,11 +997,11 @@ function App() {
           const target = e.target as HTMLElement;
           const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA';
 
-          if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+          if (!isInput && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
               if (e.shiftKey) performRedo();
               else performUndo();
               e.preventDefault();
-          } else if ((e.metaKey || e.ctrlKey) && e.key === 'y') {
+          } else if (!isInput && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'y') {
               performRedo();
               e.preventDefault();
           } else if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
@@ -1171,44 +1212,50 @@ function App() {
           selectedElements={selectedElements}
           onGeometryChange={handleGeometryChange}
           onStyleChange={handleSelectedStyleChange}
+          onStylePreview={handleSelectedStylePreview}
+          onStylePreviewCommit={commitStylePreview}
           onDuplicate={handleDuplicateSelected}
           onDelete={handleDeleteSelected}
         />
       </div>
       
-      <div className="bg-brand-50 dark:bg-slate-800 border-t border-brand-100 dark:border-slate-700 px-3 py-1 text-xs text-brand-800 dark:text-brand-300 flex justify-between items-center select-none font-medium z-10 h-7 transition-colors">
-         <div className="flex gap-1 items-center">
+      <div className="editor-statusbar border-t border-brand-100 bg-brand-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+         <div className="editor-statusbar-dimensions">
              <input 
                 type="number" 
-                value={activeTab.canvasWidth} 
+                value={activeTab.canvasWidth}
+                aria-label="畫布寬度"
                 onChange={(e) => updateTab(activeTabId, { canvasWidth: parseInt(e.target.value) || 100 })}
                 onBlur={commitCanvasDimensions}
-                className="w-[3.5rem] bg-transparent text-right hover:bg-white/50 dark:hover:bg-slate-700 focus:bg-white dark:focus:bg-slate-700 focus:outline-none rounded px-0.5"
+                className="editor-statusbar-dimension bg-transparent text-right hover:bg-white/50 dark:hover:bg-slate-700 focus:bg-white dark:focus:bg-slate-700 focus:outline-none rounded px-0.5"
              />
              <span className="opacity-80">x</span>
              <input 
                 type="number" 
-                value={activeTab.canvasHeight} 
+                value={activeTab.canvasHeight}
+                aria-label="畫布高度"
                 onChange={(e) => updateTab(activeTabId, { canvasHeight: parseInt(e.target.value) || 100 })}
                 onBlur={commitCanvasDimensions}
-                className="w-[3.5rem] bg-transparent text-left hover:bg-white/50 dark:hover:bg-slate-700 focus:bg-white dark:focus:bg-slate-700 focus:outline-none rounded px-0.5"
+                className="editor-statusbar-dimension bg-transparent text-left hover:bg-white/50 dark:hover:bg-slate-700 focus:bg-white dark:focus:bg-slate-700 focus:outline-none rounded px-0.5"
              />
-             <span className="opacity-80 ml-1">px</span>
+             <span className="editor-statusbar-unit opacity-80">px</span>
              <button
                 type="button"
                 onClick={() => setCanvasSpaceDialogOpen(true)}
-                className="ml-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-brand-700 hover:bg-brand-100 dark:text-brand-300 dark:hover:bg-slate-700"
+                className="editor-statusbar-add inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-brand-700 hover:bg-brand-100 dark:text-brand-300 dark:hover:bg-slate-700"
                 title="Add blank space around the canvas"
+                aria-label="增加畫布留白"
              >
-                <PanelTopOpen size={11} /> Add space
+                <PanelTopOpen size={13} /> <span className="editor-statusbar-add-label">Add space</span>
              </button>
          </div>
 
-         <div className="flex items-center gap-2">
+         <div className="editor-statusbar-zoom">
             <button 
                 onClick={() => setScale(calculateFitScale(activeTab.canvasWidth, activeTab.canvasHeight))}
                 className="p-0.5 hover:bg-brand-100 dark:hover:bg-slate-700 rounded text-brand-700 dark:text-brand-400"
                 title="Fit to Screen"
+                aria-label="縮放至符合視窗"
             >
                 <Maximize size={12} />
             </button>
@@ -1216,6 +1263,7 @@ function App() {
                 <button 
                     onClick={() => setScale(Math.max(0.1, activeTab.scale - 0.1))}
                     className="hover:text-brand-600 dark:hover:text-brand-300 dark:text-slate-300"
+                    aria-label="縮小"
                 >
                     <Minus size={10} />
                 </button>
@@ -1227,12 +1275,14 @@ function App() {
                     step="0.05"
                     value={activeTab.scale}
                     onChange={(e) => setScale(parseFloat(e.target.value))}
-                    className="w-20 h-1 bg-slate-200 dark:bg-slate-600 rounded-lg appearance-none cursor-pointer accent-brand-600 dark:accent-brand-500"
+                    className="editor-statusbar-zoom-slider w-20 h-1 bg-slate-200 dark:bg-slate-600 rounded-lg appearance-none cursor-pointer accent-brand-600 dark:accent-brand-500"
+                    aria-label="畫布縮放比例"
                 />
 
                 <button 
                     onClick={() => setScale(Math.min(3.0, activeTab.scale + 0.1))}
                     className="hover:text-brand-600 dark:hover:text-brand-300 dark:text-slate-300"
+                    aria-label="放大"
                 >
                     <Plus size={10} />
                 </button>
@@ -1241,20 +1291,11 @@ function App() {
             </div>
          </div>
 
-         <div className={`text-[10px] ${saveStatus === 'error' ? 'text-red-500' : 'opacity-70'}`} title="Workspace is automatically stored in this browser">
-             {saveStatus === 'loading' ? 'Restoring…' : saveStatus === 'saving' ? 'Saving…' : saveStatus === 'error' ? 'Save failed' : 'Saved locally'}
-         </div>
-
-         <div className="flex gap-3 opacity-75 hidden md:flex text-[10px]">
-             <span>Esc: Select</span>
-             <span>Shift+Click: Multi-select</span>
-             <span>Drag: Box select</span>
-             <span>Alt+Drag: No snap</span>
-             <span>Ctrl+D: Duplicate</span>
-             <span>Alt+S: Capture</span>
-             <span>Del: Delete</span>
-             <span>Ctrl+C: Copy</span>
-             <span>Ctrl+V: Paste</span>
+         <div className="editor-statusbar-actions">
+             <div className={`editor-statusbar-save text-[11px] ${saveStatus === 'error' ? 'text-red-500' : 'opacity-70'}`} title="Workspace is automatically stored in this browser">
+                 {saveStatus === 'loading' ? 'Restoring…' : saveStatus === 'saving' ? 'Saving…' : saveStatus === 'error' ? 'Save failed' : 'Saved locally'}
+             </div>
+             <OperationHelp />
          </div>
       </div>
 

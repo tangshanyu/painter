@@ -7,6 +7,8 @@ interface PropertiesPanelProps {
   selectedElements: DrawingElement[];
   onGeometryChange: (id: string, values: { x?: number; y?: number; width?: number; height?: number }) => void;
   onStyleChange: (values: Partial<DrawingElement>) => void;
+  onStylePreview: (values: Partial<DrawingElement>) => void;
+  onStylePreviewCommit: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
 }
@@ -49,6 +51,8 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
   selectedElements,
   onGeometryChange,
   onStyleChange,
+  onStylePreview,
+  onStylePreviewCommit,
   onDuplicate,
   onDelete,
 }) => {
@@ -100,11 +104,11 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
             <div className="space-y-3">
               <label className="flex items-center justify-between text-xs text-slate-600 dark:text-slate-300">
                 Color
-                <input type="color" value={selected.color} onChange={event => onStyleChange({ color: event.target.value })} className="h-7 w-10 cursor-pointer rounded border border-slate-200 bg-transparent" />
+                <input type="color" value={selected.color} onChange={event => onStylePreview({ color: event.target.value })} onBlur={onStylePreviewCommit} className="h-7 w-10 cursor-pointer rounded border border-slate-200 bg-transparent" />
               </label>
               <label className="block text-xs text-slate-600 dark:text-slate-300">
                 <span className="mb-1 flex justify-between"><span>Opacity</span><span>{Math.round((selected.opacity ?? 1) * 100)}%</span></span>
-                <input type="range" min="0.1" max="1" step="0.05" value={selected.opacity ?? 1} onChange={event => onStyleChange({ opacity: Number(event.target.value) })} className="w-full accent-brand-600" />
+                <input type="range" min="0.1" max="1" step="0.05" value={selected.opacity ?? 1} onChange={event => onStylePreview({ opacity: Number(event.target.value) })} onPointerUp={onStylePreviewCommit} onPointerCancel={onStylePreviewCommit} onKeyUp={onStylePreviewCommit} onBlur={onStylePreviewCommit} className="w-full accent-brand-600" />
               </label>
               {!isText && selected.type !== 'image' && selected.type !== 'spotlight' && (
                 <NumericField
@@ -131,7 +135,7 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                 </label>
                 <label className="block text-xs text-slate-600 dark:text-slate-300">
                   <span className="mb-1 flex justify-between"><span>Line height</span><span>{(selected.lineHeight ?? 1.2).toFixed(1)}</span></span>
-                  <input type="range" min="1" max="2" step="0.1" value={selected.lineHeight ?? 1.2} onChange={event => onStyleChange({ lineHeight: Number(event.target.value) })} className="w-full accent-brand-600" />
+                  <input type="range" min="1" max="2" step="0.1" value={selected.lineHeight ?? 1.2} onChange={event => onStylePreview({ lineHeight: Number(event.target.value) })} onPointerUp={onStylePreviewCommit} onPointerCancel={onStylePreviewCommit} onKeyUp={onStylePreviewCommit} onBlur={onStylePreviewCommit} className="w-full accent-brand-600" />
                 </label>
               </div>
             </Section>
@@ -163,7 +167,7 @@ const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                 </label>
                 <label className="block text-xs text-slate-600 dark:text-slate-300">
                   <span className="mb-1 flex justify-between"><span>Dim strength</span><span>{Math.round((selected.spotlightOpacity ?? 0.58) * 100)}%</span></span>
-                  <input type="range" min="0.15" max="0.85" step="0.05" value={selected.spotlightOpacity ?? 0.58} onChange={event => onStyleChange({ spotlightOpacity: Number(event.target.value) })} className="w-full accent-brand-600" />
+                  <input type="range" min="0.15" max="0.85" step="0.05" value={selected.spotlightOpacity ?? 0.58} onChange={event => onStylePreview({ spotlightOpacity: Number(event.target.value) })} onPointerUp={onStylePreviewCommit} onPointerCancel={onStylePreviewCommit} onKeyUp={onStylePreviewCommit} onBlur={onStylePreviewCommit} className="w-full accent-brand-600" />
                 </label>
               </div>
             </Section>

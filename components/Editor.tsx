@@ -81,6 +81,14 @@ const rotatePoint = (point: Point, center: Point, angle: number): Point => {
   return { x: center.x + dx * cos - dy * sin, y: center.y + dx * sin + dy * cos };
 };
 
+const cloneElements = (elements: DrawingElement[]): DrawingElement[] => elements.map(element => ({
+  ...element,
+  points: element.points?.map(point => ({ ...point })),
+}));
+
+const elementsEqual = (left: DrawingElement[], right: DrawingElement[]) =>
+  JSON.stringify(left) === JSON.stringify(right);
+
 const Editor: React.FC<EditorProps> = ({ 
   tab, 
   activeTool, 
@@ -140,6 +148,12 @@ const Editor: React.FC<EditorProps> = ({
   const resizeCommitRef = useRef(false);
 
   const [dragStartPos, setDragStartPos] = useState<Point | null>(null);
+  const [dragInteraction, setDragInteraction] = useState<{
+    startPos: Point;
+    originalElements: DrawingElement[];
+  } | null>(null);
+  const gestureStartElementsRef = useRef<DrawingElement[] | null>(null);
+  const skipTextBlurCommitRef = useRef(false);
   const [cursor, setCursor] = useState('default');
   
   const [currentElement, setCurrentElement] = useState<DrawingElement | null>(null);
@@ -217,6 +231,7 @@ const Editor: React.FC<EditorProps> = ({
 
   const commitText = useCallback(() => {
     if (!textInput || !textInput.visible) return;
+    skipTextBlurCommitRef.current = false;
     setTextInput(null);
     let newElements = textInput.id ? tab.elements.filter(el => el.id !== textInput.id) : [...tab.elements];
 
@@ -242,6 +257,10 @@ const Editor: React.FC<EditorProps> = ({
           : [...tab.elements, newElement];
         setSelectedElementId(newElement.id);
     }
+    if (elementsEqual(tab.elements, newElements)) {
+      if (textInput.id) setSelectedElementId(textInput.id);
+      return;
+    }
     const newHistory = tab.history.slice(0, tab.historyIndex + 1);
     newHistory.push(createDocumentSnapshot(tab, { elements: newElements }));
     updateTab(tab.id, { elements: newElements, history: newHistory, historyIndex: newHistory.length - 1 });
@@ -255,7 +274,7 @@ const Editor: React.FC<EditorProps> = ({
 
     for (let i = tab.elements.length - 1; i >= 0; i--) {
         const el = tab.elements[i];
-        if ((el.type === 'text' || el.type === 'callout') && isPointInElement(pos.x, pos.y, el, ctx)) {
+        if (!el.hidden && !el.locked && (el.type === 'text' || el.type === 'callout') && isPointInElement(pos.x, pos.y, el, ctx)) {
             setTextInput({
                 id: el.id,
                 originalElement: el,
@@ -288,12 +307,21 @@ const Editor: React.FC<EditorProps> = ({
     }
 
     const pos = getMousePos(canvasRef.current, e);
+    const beginDrag = (ids: string[]) => {
+      const originalElements = cloneElements(tab.elements.filter(element => ids.includes(element.id)));
+      gestureStartElementsRef.current = cloneElements(tab.elements);
+      setDragInteraction({ startPos: pos, originalElements });
+      setIsDragging(true);
+      setDragStartPos(pos);
+      setCursor('grabbing');
+    };
 
     if (!e.shiftKey && selectedElementIds.length === 1 && selectedElementId) {
         const selectedEl = tab.elements.find(el => el.id === selectedElementId);
         if (selectedEl && !selectedEl.locked) {
             const handle = getResizeHandleType(pos.x, pos.y, selectedEl);
             if (handle) {
+                gestureStartElementsRef.current = cloneElements(tab.elements);
                 setElementResizeState({
                     handle,
                     startPos: pos,
@@ -302,9 +330,7 @@ const Editor: React.FC<EditorProps> = ({
                 return;
             }
             if (isPointInElement(pos.x, pos.y, selectedEl, ctx)) {
-                setIsDragging(true);
-                setDragStartPos(pos);
-                setCursor('grabbing');
+                beginDrag(selectedElementIds);
                 return;
             }
         }
@@ -317,6 +343,7 @@ const Editor: React.FC<EditorProps> = ({
             const handle = getGroupHandle(pos.x, pos.y, groupBounds);
             if (handle) {
                 const center = { x: groupBounds.x + groupBounds.w / 2, y: groupBounds.y + groupBounds.h / 2 };
+                gestureStartElementsRef.current = cloneElements(tab.elements);
                 setGroupTransformState({
                     handle,
                     startPos: pos,
@@ -333,9 +360,7 @@ const Editor: React.FC<EditorProps> = ({
             isPointInElement(pos.x, pos.y, element, ctx)
         );
         if (selectedHit) {
-            setIsDragging(true);
-            setDragStartPos(pos);
-            setCursor('grabbing');
+            beginDrag(selectedElementIds);
             return;
         }
     }
@@ -371,8 +396,7 @@ const Editor: React.FC<EditorProps> = ({
       if (foundId) {
         const el = tab.elements.find(e => e.id === foundId);
         if (el && !el.locked) {
-            setIsDragging(true);
-            setDragStartPos(pos);
+            beginDrag([foundId]);
         }
       }
       return;
@@ -685,10 +709,10 @@ const Editor: React.FC<EditorProps> = ({
         return;
     }
 
-    if (isDragging && selectedElementIds.length > 0 && dragStartPos) {
-      let dx = pos.x - dragStartPos.x;
-      let dy = pos.y - dragStartPos.y;
-      const movingElements = tab.elements.filter(element => selectedElementIds.includes(element.id) && !element.hidden);
+    if (isDragging && selectedElementIds.length > 0 && dragInteraction) {
+      let dx = pos.x - dragInteraction.startPos.x;
+      let dy = pos.y - dragInteraction.startPos.y;
+      const movingElements = dragInteraction.originalElements.filter(element => !element.hidden && !element.locked);
       const movingBounds = getGroupBounds(movingElements);
 
       if (movingBounds && !e.altKey) {
@@ -739,19 +763,20 @@ const Editor: React.FC<EditorProps> = ({
         setSnapGuides({ vertical: [], horizontal: [] });
       }
 
+      const originalsById = new Map(dragInteraction.originalElements.map(element => [element.id, element]));
       const updatedElements = tab.elements.map(el => {
-        if (!selectedElementIds.includes(el.id) || el.locked) return el;
-        const newEl = { ...el };
+        const original = originalsById.get(el.id);
+        if (!original || original.locked) return el;
+        const newEl = { ...original };
         if (newEl.points) {
           newEl.points = newEl.points.map(point => ({ x: point.x + dx, y: point.y + dy }));
         } else {
-          newEl.x = (el.x || 0) + dx;
-          newEl.y = (el.y || 0) + dy;
+          newEl.x = (original.x || 0) + dx;
+          newEl.y = (original.y || 0) + dy;
         }
         return newEl;
       });
       updateTab(tab.id, { elements: updatedElements });
-      setDragStartPos(pos);
       return;
     }
 
@@ -801,6 +826,14 @@ const Editor: React.FC<EditorProps> = ({
   };
 
   const handleMouseUp = async () => {
+    const commitGestureHistory = () => {
+      const originalElements = gestureStartElementsRef.current;
+      gestureStartElementsRef.current = null;
+      if (!originalElements || elementsEqual(originalElements, tab.elements)) return;
+      const newHistory = tab.history.slice(0, tab.historyIndex + 1);
+      newHistory.push(createDocumentSnapshot(tab));
+      updateTab(tab.id, { history: newHistory, historyIndex: newHistory.length - 1 });
+    };
     if (canvasResizeState) {
         if (resizeCommitRef.current) return;
         resizeCommitRef.current = true;
@@ -833,9 +866,7 @@ const Editor: React.FC<EditorProps> = ({
     }
     if (groupTransformState) {
         setGroupTransformState(null);
-        const newHistory = tab.history.slice(0, tab.historyIndex + 1);
-        newHistory.push(createDocumentSnapshot(tab));
-        updateTab(tab.id, { history: newHistory, historyIndex: newHistory.length - 1 });
+        commitGestureHistory();
         return;
     }
     if (marquee) {
@@ -856,18 +887,15 @@ const Editor: React.FC<EditorProps> = ({
     }
     if (elementResizeState) {
         setElementResizeState(null);
-        const newHistory = tab.history.slice(0, tab.historyIndex + 1);
-        newHistory.push(createDocumentSnapshot(tab));
-        updateTab(tab.id, { history: newHistory, historyIndex: newHistory.length - 1 });
+        commitGestureHistory();
         return;
     }
     if (isDragging) {
       setIsDragging(false);
       setDragStartPos(null);
+      setDragInteraction(null);
       setSnapGuides({ vertical: [], horizontal: [] });
-      const newHistory = tab.history.slice(0, tab.historyIndex + 1);
-      newHistory.push(createDocumentSnapshot(tab));
-      updateTab(tab.id, { history: newHistory, historyIndex: newHistory.length - 1 });
+      commitGestureHistory();
       return;
     }
     if (!isDrawing || !currentElement) return;
@@ -937,16 +965,16 @@ const Editor: React.FC<EditorProps> = ({
         const finalY = h < 0 ? (currentElement.y || 0) + h : (currentElement.y || 0);
         const finalW = Math.abs(w);
         const finalH = Math.abs(h);
-        if (finalW < 10 || finalH < 10) {
-            setCurrentElement(null); 
-            return;
-        }
+        const inputX = finalW < 10 ? Math.min(finalX, Math.max(0, tab.canvasWidth - 120)) : finalX;
+        const inputY = finalH < 10 ? Math.min(finalY, Math.max(0, tab.canvasHeight - toolSettings.fontSize * 2)) : finalY;
+        const defaultWidth = Math.max(120, Math.min(280, tab.canvasWidth - inputX));
+        const minimumHeight = Math.ceil(toolSettings.fontSize * (activeTool === 'callout' ? 3.2 : 1.6));
         setTextInput({
             elementType: activeTool,
-            x: finalX,
-            y: finalY,
-            width: finalW,
-            height: finalH,
+            x: inputX,
+            y: inputY,
+            width: finalW < 10 ? defaultWidth : finalW,
+            height: finalH < 10 ? minimumHeight : Math.max(finalH, minimumHeight),
             text: '',
             color: toolSettings.color,
             fontSize: toolSettings.fontSize,
@@ -1222,10 +1250,28 @@ const Editor: React.FC<EditorProps> = ({
           <textarea
             autoFocus
             value={textInput.text}
-            onChange={(e) => setTextInput({ ...textInput, text: e.target.value })}
-            onBlur={commitText}
+            onChange={(e) => {
+              const measuredHeight = Math.ceil(e.currentTarget.scrollHeight / Math.max(tab.scale, 0.1));
+              setTextInput({
+                ...textInput,
+                text: e.target.value,
+                height: Math.max(textInput.height, measuredHeight),
+              });
+            }}
+            onBlur={() => {
+              if (skipTextBlurCommitRef.current) {
+                skipTextBlurCommitRef.current = false;
+                return;
+              }
+              commitText();
+            }}
             onKeyDown={(e) => {
-               if (e.key === 'Escape') setTextInput(null);
+               if (e.key === 'Escape') {
+                 e.preventDefault();
+                 e.stopPropagation();
+                 skipTextBlurCommitRef.current = true;
+                 setTextInput(null);
+               }
             }}
             style={{
               position: 'absolute',
@@ -1241,7 +1287,7 @@ const Editor: React.FC<EditorProps> = ({
               background: textInput.elementType === 'callout' ? '#ffffff' : 'rgba(255, 255, 255, 0.8)',
               border: textInput.elementType === 'callout' ? `2px solid ${textInput.color}` : '1px dashed #3b82f6',
               outline: 'none',
-              overflow: 'auto',
+              overflow: 'hidden',
               whiteSpace: 'pre-wrap',
               overflowWrap: 'anywhere',
               wordBreak: 'break-word',
