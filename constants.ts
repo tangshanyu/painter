@@ -1,13 +1,31 @@
 
-import { ToolSettings } from './types';
+import { ToolSettings, ToolSizeMap } from './types';
+
+export const DEFAULT_TOOL_SIZES: ToolSizeMap = {
+  pen: 4,
+  highlighter: 4,
+  rect: 4,
+  circle: 4,
+  triangle: 4,
+  diamond: 4,
+  line: 4,
+  arrow: 4,
+  text: 24,
+  callout: 18,
+  stamp: 32,
+  symbol: 48,
+  pixelate: 12,
+};
 
 export const DEFAULT_TOOL_SETTINGS: ToolSettings = {
   color: '#ef4444', // Red default
   strokeWidth: 4,
   fontSize: 24,
+  toolSizes: { ...DEFAULT_TOOL_SIZES },
   opacity: 1,
   arrowStyle: 'filled',
   stampStyle: 'circle',
+  symbol: '✓',
   pixelateStyle: 'pixel',
   highlighterStyle: 'brush',
 };

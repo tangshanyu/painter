@@ -21,6 +21,8 @@ interface EditorProps {
   updateTab: (id: string, updates: Partial<TabData>) => void;
   selectedElementId: string | null;
   setSelectedElementId: (id: string | null) => void;
+  selectedElementIds: string[];
+  setSelectedElementIds: (ids: string[]) => void;
   stampCounter: number;
   onStamp: () => void;
   onCrop: (x: number, y: number, w: number, h: number) => void;
@@ -31,6 +33,54 @@ interface EditorProps {
   onAddCanvasSpace: (edge: CanvasEdge, amount: number) => void | Promise<void>;
 }
 
+interface Bounds {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+const getGroupBounds = (elements: DrawingElement[]): Bounds | null => {
+  if (elements.length === 0) return null;
+  const boxes = elements.map(getElementBounds);
+  const left = Math.min(...boxes.map(box => box.x));
+  const top = Math.min(...boxes.map(box => box.y));
+  const right = Math.max(...boxes.map(box => box.x + box.w));
+  const bottom = Math.max(...boxes.map(box => box.y + box.h));
+  return { x: left, y: top, w: right - left, h: bottom - top };
+};
+
+const getGroupHandle = (x: number, y: number, bounds: Bounds): ResizeHandleType => {
+  const padding = 6;
+  const hitSize = 14;
+  const half = hitSize / 2;
+  const left = bounds.x - padding;
+  const right = bounds.x + bounds.w + padding;
+  const top = bounds.y - padding;
+  const bottom = bounds.y + bounds.h + padding;
+  const midX = bounds.x + bounds.w / 2;
+  const midY = bounds.y + bounds.h / 2;
+  const hit = (hx: number, hy: number) => x >= hx - half && x <= hx + half && y >= hy - half && y <= hy + half;
+  if (hit(left, top)) return 'nw';
+  if (hit(midX, top)) return 'n';
+  if (hit(right, top)) return 'ne';
+  if (hit(right, midY)) return 'e';
+  if (hit(right, bottom)) return 'se';
+  if (hit(midX, bottom)) return 's';
+  if (hit(left, bottom)) return 'sw';
+  if (hit(left, midY)) return 'w';
+  if (hit(midX, top - 22)) return 'rotate';
+  return null;
+};
+
+const rotatePoint = (point: Point, center: Point, angle: number): Point => {
+  const dx = point.x - center.x;
+  const dy = point.y - center.y;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  return { x: center.x + dx * cos - dy * sin, y: center.y + dx * sin + dy * cos };
+};
+
 const Editor: React.FC<EditorProps> = ({ 
   tab, 
   activeTool, 
@@ -38,6 +88,8 @@ const Editor: React.FC<EditorProps> = ({
   updateTab,
   selectedElementId,
   setSelectedElementId,
+  selectedElementIds,
+  setSelectedElementIds,
   stampCounter,
   onStamp,
   onCrop,
@@ -53,6 +105,14 @@ const Editor: React.FC<EditorProps> = ({
   
   const [isDrawing, setIsDrawing] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [marquee, setMarquee] = useState<{ start: Point; current: Point } | null>(null);
+  const [snapGuides, setSnapGuides] = useState<{ vertical: number[]; horizontal: number[] }>({ vertical: [], horizontal: [] });
+  const [panState, setPanState] = useState<{
+    startX: number;
+    startY: number;
+    scrollLeft: number;
+    scrollTop: number;
+  } | null>(null);
   
   const [elementResizeState, setElementResizeState] = useState<{
     handle: ResizeHandleType;
@@ -70,6 +130,13 @@ const Editor: React.FC<EditorProps> = ({
       offsetX: number;
       offsetY: number;
   } | null>(null);
+  const [groupTransformState, setGroupTransformState] = useState<{
+    handle: ResizeHandleType;
+    startPos: Point;
+    bounds: Bounds;
+    originalElements: DrawingElement[];
+    startAngle: number;
+  } | null>(null);
   const resizeCommitRef = useRef(false);
 
   const [dragStartPos, setDragStartPos] = useState<Point | null>(null);
@@ -80,11 +147,16 @@ const Editor: React.FC<EditorProps> = ({
   
   const [textInput, setTextInput] = useState<{
     id?: string;
+    originalElement?: DrawingElement;
+    elementType: 'text' | 'callout';
     x: number;
     y: number;
     width: number;
     height: number;
     text: string;
+    color: string;
+    fontSize: number;
+    opacity: number;
     visible: boolean;
   } | null>(null);
 
@@ -111,35 +183,69 @@ const Editor: React.FC<EditorProps> = ({
     const dpr = window.devicePixelRatio || 1;
     canvas.width = tab.canvasWidth * dpr;
     canvas.height = tab.canvasHeight * dpr;
-    renderCanvas(canvas, ctx, bgImage, tab.elements, currentElement, selectedElementId, tab.scale, dpr);
-  }, [tab.elements, tab.canvasWidth, tab.canvasHeight, bgImage, currentElement, selectedElementId, tab.scale]);
+    renderCanvas(canvas, ctx, bgImage, tab.elements, currentElement, selectedElementIds, tab.scale, dpr);
+
+    ctx.save();
+    ctx.setLineDash([5, 4]);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = '#ec4899';
+    snapGuides.vertical.forEach(x => {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, tab.canvasHeight);
+      ctx.stroke();
+    });
+    snapGuides.horizontal.forEach(y => {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(tab.canvasWidth, y);
+      ctx.stroke();
+    });
+
+    if (marquee) {
+      const x = Math.min(marquee.start.x, marquee.current.x);
+      const y = Math.min(marquee.start.y, marquee.current.y);
+      const width = Math.abs(marquee.current.x - marquee.start.x);
+      const height = Math.abs(marquee.current.y - marquee.start.y);
+      ctx.fillStyle = 'rgba(59, 130, 246, 0.12)';
+      ctx.strokeStyle = '#3b82f6';
+      ctx.fillRect(x, y, width, height);
+      ctx.strokeRect(x, y, width, height);
+    }
+    ctx.restore();
+  }, [tab.elements, tab.canvasWidth, tab.canvasHeight, bgImage, currentElement, selectedElementIds, tab.scale, marquee, snapGuides]);
 
   const commitText = useCallback(() => {
     if (!textInput || !textInput.visible) return;
     setTextInput(null);
-    let newElements = textInput.id 
-        ? tab.elements.filter(el => el.id !== textInput.id) 
-        : [...tab.elements];
+    let newElements = textInput.id ? tab.elements.filter(el => el.id !== textInput.id) : [...tab.elements];
 
     if (textInput.text.trim()) {
         const newElement: DrawingElement = {
+          ...textInput.originalElement,
           id: textInput.id || Date.now().toString(),
-          type: 'text',
-          color: toolSettings.color,
-          strokeWidth: toolSettings.strokeWidth, 
+          type: textInput.elementType,
+          color: textInput.color,
+          opacity: textInput.opacity,
+          strokeWidth: textInput.elementType === 'callout'
+            ? Math.min(4, Math.max(2, textInput.fontSize / 8))
+            : Math.max(1, textInput.fontSize / 6),
+          fontSize: textInput.fontSize,
           x: textInput.x,
           y: textInput.y,
           width: textInput.width,
           height: textInput.height,
           text: textInput.text
         };
-        newElements.push(newElement);
+        newElements = textInput.id
+          ? tab.elements.map(element => element.id === textInput.id ? newElement : element)
+          : [...tab.elements, newElement];
         setSelectedElementId(newElement.id);
     }
     const newHistory = tab.history.slice(0, tab.historyIndex + 1);
     newHistory.push(createDocumentSnapshot(tab, { elements: newElements }));
     updateTab(tab.id, { elements: newElements, history: newHistory, historyIndex: newHistory.length - 1 });
-  }, [textInput, tab.elements, tab.history, tab.historyIndex, tab.id, toolSettings, updateTab, setSelectedElementId]);
+  }, [textInput, tab.elements, tab.history, tab.historyIndex, tab.id, updateTab, setSelectedElementId]);
 
   const handleDoubleClick = (e: React.MouseEvent) => {
     if (!canvasRef.current) return;
@@ -149,14 +255,19 @@ const Editor: React.FC<EditorProps> = ({
 
     for (let i = tab.elements.length - 1; i >= 0; i--) {
         const el = tab.elements[i];
-        if (el.type === 'text' && isPointInElement(pos.x, pos.y, el, ctx)) {
+        if ((el.type === 'text' || el.type === 'callout') && isPointInElement(pos.x, pos.y, el, ctx)) {
             setTextInput({
                 id: el.id,
+                originalElement: el,
+                elementType: el.type,
                 x: el.x || 0,
                 y: el.y || 0,
                 width: el.width || 0,
                 height: el.height || 0,
                 text: el.text || '',
+                color: el.color,
+                fontSize: el.fontSize ?? el.strokeWidth * 6,
+                opacity: el.opacity ?? 1,
                 visible: true
             });
             setSelectedElementId(null); 
@@ -167,6 +278,7 @@ const Editor: React.FC<EditorProps> = ({
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if (!canvasRef.current) return;
+    if (activeTool === 'hand') return;
     const ctx = canvasRef.current.getContext('2d');
     if (!ctx) return;
 
@@ -177,7 +289,7 @@ const Editor: React.FC<EditorProps> = ({
 
     const pos = getMousePos(canvasRef.current, e);
 
-    if (selectedElementId) {
+    if (!e.shiftKey && selectedElementIds.length === 1 && selectedElementId) {
         const selectedEl = tab.elements.find(el => el.id === selectedElementId);
         if (selectedEl && !selectedEl.locked) {
             const handle = getResizeHandleType(pos.x, pos.y, selectedEl);
@@ -189,6 +301,42 @@ const Editor: React.FC<EditorProps> = ({
                 });
                 return;
             }
+            if (isPointInElement(pos.x, pos.y, selectedEl, ctx)) {
+                setIsDragging(true);
+                setDragStartPos(pos);
+                setCursor('grabbing');
+                return;
+            }
+        }
+    }
+
+    if (!e.shiftKey && selectedElementIds.length > 1) {
+        const groupElements = tab.elements.filter(element => selectedElementIds.includes(element.id) && !element.hidden);
+        const groupBounds = getGroupBounds(groupElements);
+        if (groupBounds && groupElements.every(element => !element.locked)) {
+            const handle = getGroupHandle(pos.x, pos.y, groupBounds);
+            if (handle) {
+                const center = { x: groupBounds.x + groupBounds.w / 2, y: groupBounds.y + groupBounds.h / 2 };
+                setGroupTransformState({
+                    handle,
+                    startPos: pos,
+                    bounds: groupBounds,
+                    originalElements: groupElements.map(element => ({ ...element, points: element.points?.map(point => ({ ...point })) })),
+                    startAngle: Math.atan2(pos.y - center.y, pos.x - center.x),
+                });
+                return;
+            }
+        }
+        const selectedHit = [...tab.elements].reverse().find(element =>
+            selectedElementIds.includes(element.id) &&
+            !element.locked &&
+            isPointInElement(pos.x, pos.y, element, ctx)
+        );
+        if (selectedHit) {
+            setIsDragging(true);
+            setDragStartPos(pos);
+            setCursor('grabbing');
+            return;
         }
     }
 
@@ -201,6 +349,22 @@ const Editor: React.FC<EditorProps> = ({
           foundId = tab.elements[i].id;
           break;
         }
+      }
+
+      if (e.shiftKey) {
+        if (foundId) {
+          const nextSelection = selectedElementIds.includes(foundId)
+            ? selectedElementIds.filter(id => id !== foundId)
+            : [...selectedElementIds, foundId];
+          setSelectedElementIds(nextSelection);
+        }
+        return;
+      }
+
+      if (!foundId) {
+        setSelectedElementId(null);
+        setMarquee({ start: pos, current: pos });
+        return;
       }
 
       setSelectedElementId(foundId);
@@ -219,6 +383,8 @@ const Editor: React.FC<EditorProps> = ({
     setDragStartPos(pos); 
 
     if (activeTool === 'stamp') {
+        const storedStampSize = toolSettings.toolSizes.stamp ?? 32;
+        const stampSize = storedStampSize < 20 ? (10 + storedStampSize) * 2 : storedStampSize;
         const newElement: DrawingElement = {
             id: Date.now().toString(),
             type: 'stamp',
@@ -227,7 +393,9 @@ const Editor: React.FC<EditorProps> = ({
             width: 0, 
             height: 0,
             color: toolSettings.color,
-            strokeWidth: toolSettings.strokeWidth,
+            opacity: toolSettings.opacity,
+            strokeWidth: stampSize,
+            stampSize,
             stampStyle: toolSettings.stampStyle,
             text: stampCounter.toString()
         };
@@ -241,16 +409,41 @@ const Editor: React.FC<EditorProps> = ({
         return;
     }
 
-    if (activeTool === 'text') {
+    if (activeTool === 'symbol') {
+        const symbolSize = toolSettings.toolSizes.symbol ?? 48;
+        const newElement: DrawingElement = {
+            id: Date.now().toString(),
+            type: 'symbol',
+            x: pos.x,
+            y: pos.y,
+            color: toolSettings.color,
+            opacity: toolSettings.opacity,
+            strokeWidth: symbolSize,
+            symbol: toolSettings.symbol,
+        };
+        const newElements = [...tab.elements, newElement];
+        const newHistory = tab.history.slice(0, tab.historyIndex + 1);
+        newHistory.push(createDocumentSnapshot(tab, { elements: newElements }));
+        updateTab(tab.id, { elements: newElements, history: newHistory, historyIndex: newHistory.length - 1 });
+        setSelectedElementId(newElement.id);
+        setIsDrawing(false);
+        return;
+    }
+
+    if (activeTool === 'text' || activeTool === 'callout') {
         setCurrentElement({
-            id: 'temp-text',
-            type: 'text',
+            id: `temp-${activeTool}`,
+            type: activeTool,
             x: pos.x,
             y: pos.y,
             width: 0,
             height: 0,
             color: toolSettings.color,
-            strokeWidth: toolSettings.strokeWidth,
+            opacity: toolSettings.opacity,
+            strokeWidth: activeTool === 'callout'
+              ? Math.min(4, Math.max(2, toolSettings.fontSize / 8))
+              : Math.max(1, toolSettings.fontSize / 6),
+            fontSize: toolSettings.fontSize,
         });
         return;
     }
@@ -263,6 +456,7 @@ const Editor: React.FC<EditorProps> = ({
       id: newId,
       type: activeTool,
       color: toolSettings.color,
+      opacity: toolSettings.opacity,
       strokeWidth: toolSettings.strokeWidth,
       // Attributes for shapes
       pixelateStyle: activeTool === 'pixelate' ? toolSettings.pixelateStyle : undefined,
@@ -313,19 +507,113 @@ const Editor: React.FC<EditorProps> = ({
     if (!canvasRef.current) return;
     const pos = getMousePos(canvasRef.current, e);
 
+    if (marquee) {
+        setMarquee({ ...marquee, current: pos });
+        return;
+    }
+
+    if (groupTransformState) {
+        const { handle, startPos, bounds, originalElements, startAngle } = groupTransformState;
+        const originalById = new Map(originalElements.map(element => [element.id, element]));
+        let updatedSelected: DrawingElement[];
+
+        if (handle === 'rotate') {
+            const center = { x: bounds.x + bounds.w / 2, y: bounds.y + bounds.h / 2 };
+            const angle = Math.atan2(pos.y - center.y, pos.x - center.x) - startAngle;
+            updatedSelected = originalElements.map(element => {
+                const updated = { ...element };
+                if (updated.points) {
+                    updated.points = updated.points.map(point => rotatePoint(point, center, angle));
+                    return updated;
+                }
+                const elementCenter = {
+                    x: (updated.x || 0) + (updated.width || 0) / 2,
+                    y: (updated.y || 0) + (updated.height || 0) / 2,
+                };
+                const rotatedCenter = rotatePoint(elementCenter, center, angle);
+                updated.x = rotatedCenter.x - (updated.width || 0) / 2;
+                updated.y = rotatedCenter.y - (updated.height || 0) / 2;
+                if (updated.type !== 'stamp' && updated.type !== 'symbol' && updated.type !== 'spotlight') {
+                    updated.rotation = (updated.rotation || 0) + angle;
+                }
+                return updated;
+            });
+        } else {
+            const dx = pos.x - startPos.x;
+            const dy = pos.y - startPos.y;
+            let left = bounds.x;
+            let top = bounds.y;
+            let right = bounds.x + bounds.w;
+            let bottom = bounds.y + bounds.h;
+            if (handle?.includes('w')) left += dx;
+            if (handle?.includes('e')) right += dx;
+            if (handle?.includes('n')) top += dy;
+            if (handle?.includes('s')) bottom += dy;
+            if (right - left < 8) handle?.includes('w') ? left = right - 8 : right = left + 8;
+            if (bottom - top < 8) handle?.includes('n') ? top = bottom - 8 : bottom = top + 8;
+            const scaleX = bounds.w > 0 ? (right - left) / bounds.w : 1;
+            const scaleY = bounds.h > 0 ? (bottom - top) / bounds.h : 1;
+            const averageScale = (Math.abs(scaleX) + Math.abs(scaleY)) / 2;
+
+            updatedSelected = originalElements.map(element => {
+                const updated = { ...element };
+                if (updated.points) {
+                    updated.points = updated.points.map(point => ({
+                        x: left + (point.x - bounds.x) * scaleX,
+                        y: top + (point.y - bounds.y) * scaleY,
+                    }));
+                    return updated;
+                }
+                updated.x = left + ((updated.x || 0) - bounds.x) * scaleX;
+                updated.y = top + ((updated.y || 0) - bounds.y) * scaleY;
+                if (updated.width !== undefined) updated.width *= scaleX;
+                if (updated.height !== undefined) updated.height *= scaleY;
+                if (updated.type === 'stamp') {
+                    const diameter = (updated.stampSize ?? (10 + updated.strokeWidth) * 2) * averageScale;
+                    updated.stampSize = Math.max(8, diameter);
+                    updated.strokeWidth = updated.stampSize;
+                }
+                if (updated.type === 'symbol') updated.strokeWidth = Math.max(8, updated.strokeWidth * averageScale);
+                return updated;
+            });
+        }
+
+        const transformedById = new Map(updatedSelected.map(element => [element.id, element]));
+        const updatedElements = tab.elements.map(element => transformedById.get(element.id) || originalById.get(element.id) || element);
+        updateTab(tab.id, { elements: updatedElements });
+        return;
+    }
+
     if (!isDrawing && !isDragging && !elementResizeState) {
-        if (selectedElementId) {
+        if (selectedElementIds.length === 1 && selectedElementId) {
             const selectedEl = tab.elements.find(el => el.id === selectedElementId);
             if (selectedEl && !selectedEl.locked) {
                 const handle = getResizeHandleType(pos.x, pos.y, selectedEl);
                 if (handle) {
                     setCursor(getCursorForHandle(handle));
+                } else if (canvasRef.current && isPointInElement(pos.x, pos.y, selectedEl, canvasRef.current.getContext('2d')!)) {
+                    setCursor('move');
                 } else {
                      setCursor(activeTool === 'select' ? 'default' : 'crosshair');
                 }
             } else {
                 setCursor(activeTool === 'select' ? 'default' : 'crosshair');
             }
+        } else if (selectedElementIds.length > 1) {
+            const groupElements = tab.elements.filter(element => selectedElementIds.includes(element.id) && !element.hidden);
+            const groupBounds = getGroupBounds(groupElements);
+            const groupHandle = groupBounds && groupElements.every(element => !element.locked)
+                ? getGroupHandle(pos.x, pos.y, groupBounds)
+                : null;
+            if (groupHandle) {
+                setCursor(getCursorForHandle(groupHandle));
+                return;
+            }
+            const selectedHit = tab.elements.some(element =>
+                selectedElementIds.includes(element.id) &&
+                isPointInElement(pos.x, pos.y, element, canvasRef.current!.getContext('2d')!)
+            );
+            setCursor(selectedHit ? 'move' : 'default');
         } else {
             setCursor(activeTool === 'select' ? 'default' : 'crosshair');
         }
@@ -397,22 +685,68 @@ const Editor: React.FC<EditorProps> = ({
         return;
     }
 
-    if (isDragging && selectedElementId && dragStartPos) {
-      const dx = pos.x - dragStartPos.x;
-      const dy = pos.y - dragStartPos.y;
-      const updatedElements = tab.elements.map(el => {
-        if (el.id !== selectedElementId) return el;
-        const newEl = { ...el };
-        if (['rect', 'image', 'text', 'arrow', 'stamp', 'pixelate', 'circle', 'triangle', 'diamond', 'line', 'highlighter'].includes(newEl.type)) {
-            // Special check for highlighter brush mode, which moves by points
-            if (newEl.type === 'highlighter' && (!newEl.highlighterStyle || newEl.highlighterStyle === 'brush')) {
-                 if (newEl.points) newEl.points = newEl.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
-            } else {
-                 newEl.x = (el.x || 0) + dx;
-                 newEl.y = (el.y || 0) + dy;
+    if (isDragging && selectedElementIds.length > 0 && dragStartPos) {
+      let dx = pos.x - dragStartPos.x;
+      let dy = pos.y - dragStartPos.y;
+      const movingElements = tab.elements.filter(element => selectedElementIds.includes(element.id) && !element.hidden);
+      const movingBounds = getGroupBounds(movingElements);
+
+      if (movingBounds && !e.altKey) {
+        const threshold = 6 / Math.max(0.1, tab.scale);
+        const otherBounds = tab.elements
+          .filter(element => !selectedElementIds.includes(element.id) && !element.hidden)
+          .map(getElementBounds);
+        const verticalTargets = [0, tab.canvasWidth / 2, tab.canvasWidth];
+        const horizontalTargets = [0, tab.canvasHeight / 2, tab.canvasHeight];
+        otherBounds.forEach(bounds => {
+          verticalTargets.push(bounds.x, bounds.x + bounds.w / 2, bounds.x + bounds.w);
+          horizontalTargets.push(bounds.y, bounds.y + bounds.h / 2, bounds.y + bounds.h);
+        });
+
+        const movingX = [movingBounds.x, movingBounds.x + movingBounds.w / 2, movingBounds.x + movingBounds.w];
+        const movingY = [movingBounds.y, movingBounds.y + movingBounds.h / 2, movingBounds.y + movingBounds.h];
+        let bestXOffset: number | undefined;
+        let bestXTarget: number | undefined;
+        let bestYOffset: number | undefined;
+        let bestYTarget: number | undefined;
+
+        for (const target of verticalTargets) {
+          for (const anchor of movingX) {
+            const offset = target - (anchor + dx);
+            if (Math.abs(offset) <= threshold && (bestXOffset === undefined || Math.abs(offset) < Math.abs(bestXOffset))) {
+              bestXOffset = offset;
+              bestXTarget = target;
             }
-        } else if (newEl.type === 'pen' && newEl.points) {
-          newEl.points = newEl.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
+          }
+        }
+        for (const target of horizontalTargets) {
+          for (const anchor of movingY) {
+            const offset = target - (anchor + dy);
+            if (Math.abs(offset) <= threshold && (bestYOffset === undefined || Math.abs(offset) < Math.abs(bestYOffset))) {
+              bestYOffset = offset;
+              bestYTarget = target;
+            }
+          }
+        }
+
+        if (bestXOffset !== undefined) dx += bestXOffset;
+        if (bestYOffset !== undefined) dy += bestYOffset;
+        setSnapGuides({
+          vertical: bestXTarget !== undefined ? [bestXTarget] : [],
+          horizontal: bestYTarget !== undefined ? [bestYTarget] : [],
+        });
+      } else {
+        setSnapGuides({ vertical: [], horizontal: [] });
+      }
+
+      const updatedElements = tab.elements.map(el => {
+        if (!selectedElementIds.includes(el.id) || el.locked) return el;
+        const newEl = { ...el };
+        if (newEl.points) {
+          newEl.points = newEl.points.map(point => ({ x: point.x + dx, y: point.y + dy }));
+        } else {
+          newEl.x = (el.x || 0) + dx;
+          newEl.y = (el.y || 0) + dy;
         }
         return newEl;
       });
@@ -497,6 +831,29 @@ const Editor: React.FC<EditorProps> = ({
         }
         return;
     }
+    if (groupTransformState) {
+        setGroupTransformState(null);
+        const newHistory = tab.history.slice(0, tab.historyIndex + 1);
+        newHistory.push(createDocumentSnapshot(tab));
+        updateTab(tab.id, { history: newHistory, historyIndex: newHistory.length - 1 });
+        return;
+    }
+    if (marquee) {
+        const left = Math.min(marquee.start.x, marquee.current.x);
+        const top = Math.min(marquee.start.y, marquee.current.y);
+        const right = Math.max(marquee.start.x, marquee.current.x);
+        const bottom = Math.max(marquee.start.y, marquee.current.y);
+        const selected = tab.elements
+            .filter(element => !element.hidden)
+            .filter(element => {
+                const bounds = getElementBounds(element);
+                return bounds.x <= right && bounds.x + bounds.w >= left && bounds.y <= bottom && bounds.y + bounds.h >= top;
+            })
+            .map(element => element.id);
+        setSelectedElementIds(selected);
+        setMarquee(null);
+        return;
+    }
     if (elementResizeState) {
         setElementResizeState(null);
         const newHistory = tab.history.slice(0, tab.historyIndex + 1);
@@ -507,6 +864,7 @@ const Editor: React.FC<EditorProps> = ({
     if (isDragging) {
       setIsDragging(false);
       setDragStartPos(null);
+      setSnapGuides({ vertical: [], horizontal: [] });
       const newHistory = tab.history.slice(0, tab.historyIndex + 1);
       newHistory.push(createDocumentSnapshot(tab));
       updateTab(tab.id, { history: newHistory, historyIndex: newHistory.length - 1 });
@@ -550,7 +908,7 @@ const Editor: React.FC<EditorProps> = ({
 
         // Filter out intersecting elements
         const remainingElements = tab.elements.filter(el => {
-             if (el.locked) return true;
+             if (el.locked || el.hidden) return true;
              const b = getElementBounds(el);
              // Simple AABB Intersection
              const intersect = !(
@@ -572,7 +930,7 @@ const Editor: React.FC<EditorProps> = ({
         return;
     }
 
-    if (activeTool === 'text') {
+    if (activeTool === 'text' || activeTool === 'callout') {
         const w = currentElement.width || 0;
         const h = currentElement.height || 0;
         const finalX = w < 0 ? (currentElement.x || 0) + w : (currentElement.x || 0);
@@ -584,11 +942,15 @@ const Editor: React.FC<EditorProps> = ({
             return;
         }
         setTextInput({
+            elementType: activeTool,
             x: finalX,
             y: finalY,
             width: finalW,
             height: finalH,
             text: '',
+            color: toolSettings.color,
+            fontSize: toolSettings.fontSize,
+            opacity: toolSettings.opacity,
             visible: true
         });
         setCurrentElement(null);
@@ -596,7 +958,7 @@ const Editor: React.FC<EditorProps> = ({
     }
     
     // Cull small geometric shapes (except brush highlighter/pen)
-    const isBoxTool = ['rect', 'arrow', 'circle', 'triangle', 'diamond', 'line'].includes(activeTool);
+    const isBoxTool = ['rect', 'arrow', 'circle', 'triangle', 'diamond', 'line', 'spotlight'].includes(activeTool);
     const isHighlighterRect = activeTool === 'highlighter' && toolSettings.highlighterStyle === 'rect';
     
     if (isBoxTool || isHighlighterRect) {
@@ -620,7 +982,7 @@ const Editor: React.FC<EditorProps> = ({
 
     let finalElement = { ...currentElement };
     // Normalize negative dimensions for basic shapes (makes resize logic easier later)
-    if (['rect', 'pixelate', 'circle', 'triangle', 'diamond', 'line', 'highlighter'].includes(finalElement.type as string)) {
+    if (['rect', 'spotlight', 'pixelate', 'circle', 'triangle', 'diamond', 'line', 'highlighter'].includes(finalElement.type as string)) {
         const w = finalElement.width || 0;
         const h = finalElement.height || 0;
         // Skip normalizing for Line or Highlighter Brush
@@ -677,6 +1039,23 @@ const Editor: React.FC<EditorProps> = ({
     }
   };
 
+  const handleViewportMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (activeTool !== 'hand' || event.button !== 0 || !containerRef.current) return;
+    event.preventDefault();
+    setPanState({
+      startX: event.clientX,
+      startY: event.clientY,
+      scrollLeft: containerRef.current.scrollLeft,
+      scrollTop: containerRef.current.scrollTop,
+    });
+  };
+
+  const handleViewportMouseMove = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!panState || !containerRef.current) return;
+    containerRef.current.scrollLeft = panState.scrollLeft - (event.clientX - panState.startX);
+    containerRef.current.scrollTop = panState.scrollTop - (event.clientY - panState.startY);
+  };
+
   const quickAddButtonClass = 'absolute z-30 inline-flex h-7 w-7 items-center justify-center rounded-full border border-brand-300 bg-white text-brand-600 shadow-md transition hover:scale-110 hover:border-brand-500 hover:bg-brand-50 focus:outline-none focus:ring-2 focus:ring-brand-400 disabled:cursor-wait disabled:opacity-50 dark:border-brand-700 dark:bg-slate-800 dark:text-brand-300 dark:hover:bg-slate-700';
 
   return (
@@ -684,10 +1063,20 @@ const Editor: React.FC<EditorProps> = ({
       ref={containerRef} 
       data-editor-viewport
       className="flex-1 min-w-0 min-h-0 bg-slate-200 dark:bg-slate-950 overflow-auto relative transition-colors"
+      style={{ cursor: activeTool === 'hand' ? (panState ? 'grabbing' : 'grab') : undefined }}
+      onMouseDown={handleViewportMouseDown}
       onMouseMove={(e) => {
+          if (panState) handleViewportMouseMove(e);
           if (canvasResizeState) handleMouseMove(e);
       }}
-      onMouseUp={() => void handleMouseUp()}
+      onMouseUp={() => {
+          if (panState) {
+            setPanState(null);
+            return;
+          }
+          void handleMouseUp();
+      }}
+      onMouseLeave={() => setPanState(null)}
       onDragOver={(e) => {
           e.preventDefault();
           e.dataTransfer.dropEffect = 'copy';
@@ -714,11 +1103,11 @@ const Editor: React.FC<EditorProps> = ({
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseLeave={() => {
-            if (!canvasResizeState) void handleMouseUp();
+            if (!canvasResizeState && activeTool !== 'hand') void handleMouseUp();
           }}
           onDoubleClick={handleDoubleClick}
           style={{ 
-            cursor, 
+            cursor: activeTool === 'hand' ? (panState ? 'grabbing' : 'grab') : cursor,
             position: 'absolute',
             left: previewOffsetX * tab.scale,
             top: previewOffsetY * tab.scale,
@@ -755,7 +1144,7 @@ const Editor: React.FC<EditorProps> = ({
           </div>
         )}
         
-        {activeTool === 'select' && !selectedElementId && (
+        {activeTool === 'select' && selectedElementIds.length === 0 && (
           <>
             <button type="button" aria-label="Resize canvas from top left" className="absolute top-0 left-0 w-3 h-3 -translate-x-1/2 -translate-y-1/2 bg-white border border-slate-400 cursor-nwse-resize z-20 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:scale-125 transition-all"
                  onMouseDown={(e) => handleCanvasResizeStart(e, 'nw')}></button>
@@ -776,7 +1165,7 @@ const Editor: React.FC<EditorProps> = ({
           </>
         )}
 
-        {activeTool === 'select' && !selectedElementId && !canvasResizeState && (
+        {activeTool === 'select' && selectedElementIds.length === 0 && !canvasResizeState && (
           <>
             <button
               type="button"
@@ -836,8 +1225,6 @@ const Editor: React.FC<EditorProps> = ({
             onChange={(e) => setTextInput({ ...textInput, text: e.target.value })}
             onBlur={commitText}
             onKeyDown={(e) => {
-               if (e.key === 'Enter' && !e.shiftKey) {
-               }
                if (e.key === 'Escape') setTextInput(null);
             }}
             style={{
@@ -846,16 +1233,21 @@ const Editor: React.FC<EditorProps> = ({
               top: textInput.y * tab.scale,
               width: textInput.width * tab.scale,
               height: textInput.height * tab.scale,
-              fontSize: `${toolSettings.strokeWidth * 6 * tab.scale}px`,
+              fontSize: `${textInput.fontSize * tab.scale}px`,
               fontFamily: 'sans-serif',
-              lineHeight: '1.2',
-              color: toolSettings.color,
-              background: 'rgba(255, 255, 255, 0.8)',
-              border: '1px dashed #3b82f6',
+              lineHeight: String(textInput.originalElement?.lineHeight ?? 1.2),
+              textAlign: textInput.originalElement?.textAlign ?? 'left',
+              color: textInput.color,
+              background: textInput.elementType === 'callout' ? '#ffffff' : 'rgba(255, 255, 255, 0.8)',
+              border: textInput.elementType === 'callout' ? `2px solid ${textInput.color}` : '1px dashed #3b82f6',
               outline: 'none',
-              overflow: 'hidden',
+              overflow: 'auto',
+              whiteSpace: 'pre-wrap',
+              overflowWrap: 'anywhere',
+              wordBreak: 'break-word',
+              boxSizing: 'border-box',
               resize: 'none',
-              padding: '0',
+              padding: textInput.elementType === 'callout' ? `${10 * tab.scale}px` : '0',
               zIndex: 50,
             }}
             placeholder="Type here..."

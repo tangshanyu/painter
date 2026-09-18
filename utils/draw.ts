@@ -16,39 +16,73 @@ const getImage = (src: string): HTMLImageElement | null => {
   return null; // Return null on first render, it will re-render when React state updates or next frame
 };
 
-// Helper function to wrap text with newline support
-const wrapText = (ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, lineHeight: number) => {
-    const paragraphs = text.split('\n');
-    let currentY = y;
+// Wrap at natural spaces when possible and fall back to grapheme-like character
+// wrapping for Chinese, Japanese, URLs, and other strings without whitespace.
+const getWrappedTextLines = (ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] => {
     const effectiveWidth = Math.max(20, maxWidth);
+    const lines: string[] = [];
 
-    paragraphs.forEach(paragraph => {
-        const words = paragraph.split(' ');
-        let line = '';
-        let testLine = '';
-        let testWidth = 0;
-
-        if (paragraph.length === 0) {
-            currentY += lineHeight;
+    text.replace(/\r\n/g, '\n').split('\n').forEach(paragraph => {
+        if (!paragraph) {
+            lines.push('');
             return;
         }
 
-        for(let n = 0; n < words.length; n++) {
-            testLine = line + words[n] + ' ';
-            const metrics = ctx.measureText(testLine);
-            testWidth = metrics.width;
-            
-            if (maxWidth > 0 && testWidth > effectiveWidth && n > 0) {
-                ctx.fillText(line, x, currentY);
-                line = words[n] + ' ';
-                currentY += lineHeight;
-            } else {
-                line = testLine;
+        let line = '';
+        Array.from(paragraph).forEach(character => {
+            const candidate = line + character;
+            if (!line || ctx.measureText(candidate).width <= effectiveWidth) {
+                line = candidate;
+                return;
             }
-        }
-        ctx.fillText(line, x, currentY);
-        currentY += lineHeight;
+
+            const lastSpace = Math.max(line.lastIndexOf(' '), line.lastIndexOf('\t'));
+            if (lastSpace > 0) {
+                lines.push(line.slice(0, lastSpace).trimEnd());
+                line = `${line.slice(lastSpace + 1)}${character}`.trimStart();
+            } else {
+                lines.push(line.trimEnd());
+                line = character.trimStart();
+            }
+        });
+        lines.push(line.trimEnd());
     });
+
+    return lines;
+};
+
+const drawWrappedText = (
+    ctx: CanvasRenderingContext2D,
+    text: string,
+    x: number,
+    y: number,
+    maxWidth: number,
+    maxHeight: number,
+    lineHeight: number,
+    alignment: 'left' | 'center' | 'right' = 'left'
+) => {
+    const lines = getWrappedTextLines(ctx, text, maxWidth);
+    const bottom = y + Math.max(lineHeight, maxHeight);
+    ctx.textAlign = alignment;
+    const drawX = alignment === 'center' ? x + maxWidth / 2 : alignment === 'right' ? x + maxWidth : x;
+    lines.forEach((line, index) => {
+        const lineY = y + index * lineHeight;
+        if (lineY + lineHeight > bottom + 0.5) return;
+        ctx.fillText(line, drawX, lineY);
+    });
+};
+
+const roundedRectPath = (ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) => {
+    const r = Math.min(radius, Math.abs(width) / 2, Math.abs(height) / 2);
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + width - r, y);
+    ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+    ctx.lineTo(x + width, y + height - r);
+    ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+    ctx.lineTo(x + r, y + height);
+    ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
 };
 
 const drawArrow = (ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, strokeWidth: number, style: ArrowStyle = 'filled') => {
@@ -113,27 +147,61 @@ const drawArrow = (ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
     }
 };
 
-const drawStamp = (ctx: CanvasRenderingContext2D, x: number, y: number, text: string, color: string, strokeWidth: number, style: StampStyle = 'circle') => {
-    const radius = 10 + strokeWidth; 
-    ctx.beginPath();
-    
-    if (style === 'square') {
-         ctx.rect(x - radius, y - radius, radius * 2, radius * 2);
-    } else {
-         ctx.arc(x, y, radius, 0, 2 * Math.PI);
-    }
-    
-    ctx.fillStyle = color;
-    ctx.fill();
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2;
-    ctx.stroke();
+const getStampDiameter = (element: DrawingElement) => element.stampSize ?? (10 + element.strokeWidth) * 2;
+const getStampRadius = (element: DrawingElement) => Math.max(8, getStampDiameter(element) / 2);
 
-    ctx.fillStyle = '#ffffff';
+const drawStamp = (ctx: CanvasRenderingContext2D, x: number, y: number, text: string, color: string, stampSize: number, style: StampStyle = 'circle') => {
+    const radius = Math.max(8, stampSize / 2);
+    ctx.beginPath();
+
+    if (style === 'square') {
+        ctx.rect(x - radius, y - radius, radius * 2, radius * 2);
+    } else if (style === 'rounded') {
+        const left = x - radius;
+        const top = y - radius;
+        const size = radius * 2;
+        const corner = radius * 0.45;
+        ctx.moveTo(left + corner, top);
+        ctx.lineTo(left + size - corner, top);
+        ctx.quadraticCurveTo(left + size, top, left + size, top + corner);
+        ctx.lineTo(left + size, top + size - corner);
+        ctx.quadraticCurveTo(left + size, top + size, left + size - corner, top + size);
+        ctx.lineTo(left + corner, top + size);
+        ctx.quadraticCurveTo(left, top + size, left, top + size - corner);
+        ctx.lineTo(left, top + corner);
+        ctx.quadraticCurveTo(left, top, left + corner, top);
+        ctx.closePath();
+    } else if (style === 'diamond') {
+        ctx.moveTo(x, y - radius);
+        ctx.lineTo(x + radius, y);
+        ctx.lineTo(x, y + radius);
+        ctx.lineTo(x - radius, y);
+        ctx.closePath();
+    } else if (style === 'circle') {
+        ctx.arc(x, y, radius, 0, 2 * Math.PI);
+    }
+
+    if (style !== 'plain') {
+        ctx.fillStyle = color;
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+    }
+
     ctx.font = `bold ${radius * 1.2}px sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(text, x, y + radius * 0.1); 
+    if (style === 'plain') {
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = Math.max(3, radius * 0.24);
+        ctx.lineJoin = 'round';
+        ctx.strokeText(text, x, y + radius * 0.1, radius * 2);
+        ctx.fillStyle = color;
+    } else {
+        ctx.fillStyle = '#ffffff';
+    }
+    ctx.fillText(text, x, y + radius * 0.1, radius * 1.6);
 };
 
 // Apply Pixelation to a region
@@ -264,7 +332,7 @@ export const renderCanvas = (
   bgImage: HTMLImageElement | null,
   elements: DrawingElement[],
   activeElement: DrawingElement | null, 
-  selectedElementId: string | null,
+  selectedElementIds: string[] | string | null,
   _scale: number = 1,
   pixelRatio: number = 1 
 ) => {
@@ -276,25 +344,26 @@ export const renderCanvas = (
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
 
+  const logicalW = canvas.width / pixelRatio;
+  const logicalH = canvas.height / pixelRatio;
+
   // Draw Background
   if (bgImage) {
     ctx.drawImage(bgImage, 0, 0);
   } else {
-    const logicalW = canvas.width / pixelRatio;
-    const logicalH = canvas.height / pixelRatio;
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, logicalW, logicalH);
   }
 
   // Draw Elements
-  elements.forEach((el) => {
-    drawElement(ctx, el);
+  elements.filter(element => !element.hidden).forEach((el) => {
+    drawElement(ctx, el, logicalW, logicalH);
   });
 
   // Draw Active Element
   if (activeElement) {
-    drawElement(ctx, activeElement);
-    if (activeElement.type === 'text' || activeElement.type === 'crop') {
+    drawElement(ctx, activeElement, logicalW, logicalH);
+    if (activeElement.type === 'text' || activeElement.type === 'callout' || activeElement.type === 'crop') {
        ctx.save();
        ctx.strokeStyle = activeElement.type === 'crop' ? '#000' : '#94a3b8';
        if (activeElement.type === 'crop') {
@@ -308,8 +377,8 @@ export const renderCanvas = (
            const ay = activeElement.y || 0;
            const aw = activeElement.width || 0;
            const ah = activeElement.height || 0;
-           const cw = canvas.width / pixelRatio;
-           const ch = canvas.height / pixelRatio;
+           const cw = logicalW;
+           const ch = logicalH;
            
            ctx.fillRect(0, 0, cw, ay); // Top
            ctx.fillRect(0, ay + ah, cw, ch - (ay + ah)); // Bottom
@@ -324,10 +393,60 @@ export const renderCanvas = (
   }
   
   // Selection Border (drawn on top of everything)
-  const selectedEl = elements.find(e => e.id === selectedElementId);
-  if (selectedEl) {
-      drawSelectionBorder(ctx, selectedEl);
+  const selection = Array.isArray(selectedElementIds)
+      ? selectedElementIds
+      : selectedElementIds ? [selectedElementIds] : [];
+  const selectedElements = elements.filter(element => !element.hidden && selection.includes(element.id));
+  if (selectedElements.length === 1) {
+      drawSelectionBorder(ctx, selectedElements[0]);
+  } else if (selectedElements.length > 1) {
+      drawGroupSelectionBorder(ctx, selectedElements);
   }
+};
+
+const drawGroupSelectionBorder = (ctx: CanvasRenderingContext2D, elements: DrawingElement[]) => {
+  const boxes = elements.map(getElementBounds);
+  const left = Math.min(...boxes.map(box => box.x));
+  const top = Math.min(...boxes.map(box => box.y));
+  const right = Math.max(...boxes.map(box => box.x + box.w));
+  const bottom = Math.max(...boxes.map(box => box.y + box.h));
+  const width = right - left;
+  const height = bottom - top;
+  const midX = left + width / 2;
+  const midY = top + height / 2;
+  const padding = 6;
+
+  ctx.save();
+  ctx.strokeStyle = '#8b5cf6';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([6, 4]);
+  ctx.strokeRect(left - padding, top - padding, width + padding * 2, height + padding * 2);
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#ffffff';
+  ctx.strokeStyle = '#8b5cf6';
+
+  const handleSize = 9;
+  const half = handleSize / 2;
+  const handles = [
+    { x: left - padding, y: top - padding }, { x: midX, y: top - padding }, { x: right + padding, y: top - padding },
+    { x: right + padding, y: midY }, { x: right + padding, y: bottom + padding }, { x: midX, y: bottom + padding },
+    { x: left - padding, y: bottom + padding }, { x: left - padding, y: midY },
+  ];
+  handles.forEach(handle => {
+    ctx.fillRect(handle.x - half, handle.y - half, handleSize, handleSize);
+    ctx.strokeRect(handle.x - half, handle.y - half, handleSize, handleSize);
+  });
+
+  const rotateY = top - padding - 22;
+  ctx.beginPath();
+  ctx.moveTo(midX, top - padding);
+  ctx.lineTo(midX, rotateY);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(midX, rotateY, 5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
 };
 
 const drawSelectionBorder = (ctx: CanvasRenderingContext2D, el: DrawingElement) => {
@@ -337,7 +456,7 @@ const drawSelectionBorder = (ctx: CanvasRenderingContext2D, el: DrawingElement) 
   const cx = (el.x || 0) + (el.width || 0) / 2;
   const cy = (el.y || 0) + (el.height || 0) / 2;
   
-  if (el.type !== 'pen' && el.type !== 'highlighter' && el.type !== 'stamp') {
+  if (el.type !== 'pen' && el.type !== 'highlighter' && el.type !== 'stamp' && el.type !== 'symbol') {
       ctx.translate(cx, cy);
       if (el.rotation) ctx.rotate(el.rotation);
       ctx.translate(-cx, -cy);
@@ -360,8 +479,11 @@ const drawSelectionBorder = (ctx: CanvasRenderingContext2D, el: DrawingElement) 
         x = minX; y = minY; w = maxX - minX; h = maxY - minY;
       }
   } else if (el.type === 'stamp') {
-      const radius = 10 + el.strokeWidth;
+      const radius = getStampRadius(el);
       x = (el.x || 0) - radius; y = (el.y || 0) - radius; w = radius * 2; h = radius * 2;
+  } else if (el.type === 'symbol') {
+      const size = Math.max(16, el.strokeWidth);
+      x = (el.x || 0) - size / 2; y = (el.y || 0) - size / 2; w = size; h = size;
   }
 
   const drawX = w < 0 ? x + w : x;
@@ -372,7 +494,7 @@ const drawSelectionBorder = (ctx: CanvasRenderingContext2D, el: DrawingElement) 
   // Draw border
   ctx.strokeRect(drawX - padding, drawY - padding, drawW + padding * 2, drawH + padding * 2);
   
-  if (!el.locked && ['rect', 'image', 'text', 'arrow', 'pixelate', 'circle', 'triangle', 'diamond', 'line', 'highlighter'].includes(el.type)) {
+  if (!el.locked && ['rect', 'image', 'text', 'callout', 'spotlight', 'arrow', 'pixelate', 'circle', 'triangle', 'diamond', 'line', 'highlighter'].includes(el.type)) {
       if (el.type === 'highlighter' && (!el.highlighterStyle || el.highlighterStyle === 'brush')) {
           // No handles for brush highlighter
       } else {
@@ -402,28 +524,31 @@ const drawSelectionBorder = (ctx: CanvasRenderingContext2D, el: DrawingElement) 
             ctx.strokeRect(hPos.x - half, hPos.y - half, handleSize, handleSize);
         });
 
-        // Rotation Handle (Top Center, sticking out)
-        const rotDist = 20;
-        const rotX = midX;
-        const rotY = top - rotDist;
-        
-        ctx.beginPath();
-        ctx.moveTo(midX, top);
-        ctx.lineTo(rotX, rotY);
-        ctx.stroke();
-        
-        ctx.beginPath();
-        ctx.arc(rotX, rotY, 5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
+        if (el.type !== 'spotlight') {
+            // Rotation Handle (Top Center, sticking out)
+            const rotDist = 20;
+            const rotX = midX;
+            const rotY = top - rotDist;
+
+            ctx.beginPath();
+            ctx.moveTo(midX, top);
+            ctx.lineTo(rotX, rotY);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.arc(rotX, rotY, 5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+        }
       }
   }
 
   ctx.restore();
 }
 
-const drawElement = (ctx: CanvasRenderingContext2D, el: DrawingElement) => {
+const drawElement = (ctx: CanvasRenderingContext2D, el: DrawingElement, canvasWidth: number = 0, canvasHeight: number = 0) => {
   ctx.save();
+  ctx.globalAlpha = el.opacity ?? 1;
   
   if (el.type === 'eraser') {
       ctx.fillStyle = 'rgba(255, 0, 0, 0.1)';
@@ -440,9 +565,9 @@ const drawElement = (ctx: CanvasRenderingContext2D, el: DrawingElement) => {
        if (!el.rotation) {
            ctx.translate(el.x || 0, el.y || 0);
            if (el.pixelateStyle === 'blur') {
-               applyBlur(ctx, el.width || 0, el.height || 0);
+               applyBlur(ctx, el.width || 0, el.height || 0, Math.max(1, el.strokeWidth));
            } else {
-               applyPixelate(ctx, el.width || 0, el.height || 0, 10);
+               applyPixelate(ctx, el.width || 0, el.height || 0, Math.max(2, el.strokeWidth));
            }
            ctx.restore();
            return;
@@ -460,7 +585,54 @@ const drawElement = (ctx: CanvasRenderingContext2D, el: DrawingElement) => {
   if (el.type === 'stamp') {
       // Stamp draws at specific x,y, no width/height logic usually
       if (el.x !== undefined && el.y !== undefined && el.text) {
-          drawStamp(ctx, el.x, el.y, el.text, el.color, el.strokeWidth, el.stampStyle);
+          drawStamp(ctx, el.x, el.y, el.text, el.color, getStampDiameter(el), el.stampStyle);
+      }
+      ctx.restore();
+      return;
+  }
+
+  if (el.type === 'symbol') {
+      if (el.x !== undefined && el.y !== undefined) {
+          const size = Math.max(16, el.strokeWidth);
+          ctx.font = `${size}px "Segoe UI Emoji", "Apple Color Emoji", sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillStyle = el.color;
+          ctx.fillText(el.symbol || el.text || '✓', el.x, el.y + size * 0.04);
+      }
+      ctx.restore();
+      return;
+  }
+
+  if (el.type === 'spotlight') {
+      const rawX = el.x || 0;
+      const rawY = el.y || 0;
+      const rawW = el.width || 0;
+      const rawH = el.height || 0;
+      const x = rawW < 0 ? rawX + rawW : rawX;
+      const y = rawH < 0 ? rawY + rawH : rawY;
+      const w = Math.abs(rawW);
+      const h = Math.abs(rawH);
+      ctx.fillStyle = `rgba(15, 23, 42, ${el.spotlightOpacity ?? 0.58})`;
+      if (el.spotlightShape === 'ellipse') {
+          ctx.beginPath();
+          ctx.rect(0, 0, canvasWidth, canvasHeight);
+          ctx.ellipse(x + w / 2, y + h / 2, Math.max(1, w / 2), Math.max(1, h / 2), 0, 0, Math.PI * 2);
+          ctx.fill('evenodd');
+      } else {
+          ctx.fillRect(0, 0, canvasWidth, Math.max(0, y));
+          ctx.fillRect(0, y + h, canvasWidth, Math.max(0, canvasHeight - y - h));
+          ctx.fillRect(0, y, Math.max(0, x), h);
+          ctx.fillRect(x + w, y, Math.max(0, canvasWidth - x - w), h);
+      }
+      ctx.strokeStyle = el.color;
+      ctx.lineWidth = Math.max(2, el.strokeWidth);
+      if (el.spotlightShape === 'ellipse') {
+          ctx.beginPath();
+          ctx.ellipse(x + w / 2, y + h / 2, Math.max(1, w / 2), Math.max(1, h / 2), 0, 0, Math.PI * 2);
+          ctx.stroke();
+      } else {
+          ctx.strokeRect(x, y, w, h);
       }
       ctx.restore();
       return;
@@ -470,7 +642,7 @@ const drawElement = (ctx: CanvasRenderingContext2D, el: DrawingElement) => {
   const cx = (el.x || 0) + (el.width || 0) / 2;
   const cy = (el.y || 0) + (el.height || 0) / 2;
 
-  if (['rect', 'image', 'text', 'arrow', 'circle', 'triangle', 'diamond', 'line', 'highlighter'].includes(el.type)) {
+  if (['rect', 'image', 'text', 'callout', 'arrow', 'circle', 'triangle', 'diamond', 'line', 'highlighter'].includes(el.type)) {
       // For highlighter rect mode, we treat it like a shape
       if (el.type !== 'highlighter' || el.highlighterStyle === 'rect') {
         ctx.translate(cx, cy);
@@ -489,7 +661,7 @@ const drawElement = (ctx: CanvasRenderingContext2D, el: DrawingElement) => {
   ctx.lineJoin = 'round';
 
   if (isHighlighter) {
-    ctx.globalAlpha = HIGHLIGHTER_OPACITY;
+    ctx.globalAlpha *= HIGHLIGHTER_OPACITY;
     ctx.lineWidth = el.strokeWidth * 3; 
   }
 
@@ -537,12 +709,50 @@ const drawElement = (ctx: CanvasRenderingContext2D, el: DrawingElement) => {
       ctx.stroke();
   } else if (el.type === 'arrow') {
       drawArrow(ctx, x, y, w, h, el.strokeWidth, el.arrowStyle || 'filled');
-  } else if (el.type === 'text') {
+  } else if (el.type === 'text' || el.type === 'callout') {
      if (el.x !== undefined && el.y !== undefined && el.text) {
-       const fontSize = el.strokeWidth * 6;
+       const fontSize = el.fontSize ?? el.strokeWidth * 6;
+       const boxX = (el.width || 0) < 0 ? el.x + (el.width || 0) : el.x;
+       const boxY = (el.height || 0) < 0 ? el.y + (el.height || 0) : el.y;
+       const boxWidth = Math.max(20, Math.abs(el.width || 0));
+       const boxHeight = Math.max(fontSize * 1.2, Math.abs(el.height || 0));
+       const padding = el.type === 'callout' ? Math.max(10, fontSize * 0.45) : 0;
+       const tailHeight = el.type === 'callout' ? Math.min(16, boxHeight * 0.2) : 0;
+       const tailAtTop = el.calloutTail === 'top-left' || el.calloutTail === 'top-right';
+       const contentY = boxY + (tailAtTop ? tailHeight : 0);
+       const contentHeight = Math.max(fontSize * 1.2, boxHeight - tailHeight);
+       if (el.type === 'callout') {
+         ctx.beginPath();
+         roundedRectPath(ctx, boxX, contentY, boxWidth, contentHeight, 12);
+         ctx.closePath();
+         ctx.fillStyle = '#ffffff';
+         ctx.fill();
+         ctx.strokeStyle = el.color;
+         ctx.lineWidth = Math.max(2, el.strokeWidth);
+         ctx.stroke();
+         const tailOnLeft = el.calloutTail === 'bottom-left' || el.calloutTail === 'top-left';
+         const tailX = boxX + Math.min(boxWidth - 18, Math.max(18, boxWidth * (tailOnLeft ? 0.3 : 0.7)));
+         const tailBaseY = tailAtTop ? contentY + 1 : contentY + contentHeight - 1;
+         const tailTipY = tailAtTop ? boxY : boxY + boxHeight;
+         ctx.beginPath();
+         ctx.moveTo(tailX - 8, tailBaseY);
+         ctx.lineTo(tailX + 8, tailBaseY);
+         ctx.lineTo(tailX + (tailOnLeft ? -4 : 4), tailTipY);
+         ctx.closePath();
+         ctx.fillStyle = '#ffffff';
+         ctx.fill();
+         ctx.strokeStyle = el.color;
+         ctx.lineWidth = Math.max(2, el.strokeWidth);
+         ctx.stroke();
+         ctx.fillStyle = el.color;
+       }
        ctx.font = `${fontSize}px sans-serif`; 
-       ctx.textBaseline = 'top'; 
-       wrapText(ctx, el.text, el.x, el.y, el.width || 0, fontSize * 1.2);
+       ctx.textBaseline = 'top';
+       ctx.beginPath();
+       ctx.rect(boxX + padding, contentY + padding, Math.max(20, boxWidth - padding * 2), Math.max(fontSize * 1.2, contentHeight - padding * 2));
+       ctx.clip();
+       const lineHeight = fontSize * (el.lineHeight ?? 1.2);
+       drawWrappedText(ctx, el.text, boxX + padding, contentY + padding, Math.max(20, boxWidth - padding * 2), Math.max(fontSize * 1.2, contentHeight - padding * 2), lineHeight, el.textAlign ?? 'left');
      }
   } else if (el.type === 'image' && el.imageData) {
      const img = getImage(el.imageData);
@@ -575,6 +785,7 @@ export const blobToDataURL = (blob: Blob): Promise<string> => {
 
 // Hit detection with Rotation Support
 export const isPointInElement = (x: number, y: number, el: DrawingElement, ctx: CanvasRenderingContext2D): boolean => {
+    if (el.hidden) return false;
     // Basic Bounds
     let bx = el.x || 0;
     let by = el.y || 0;
@@ -584,7 +795,7 @@ export const isPointInElement = (x: number, y: number, el: DrawingElement, ctx: 
     if (bh < 0) { by += bh; bh = Math.abs(bh); }
 
     // If rotated, rotate the test point AROUND the element center in REVERSE
-    if (el.rotation && el.rotation !== 0 && ['rect', 'image', 'text', 'arrow', 'pixelate', 'circle', 'triangle', 'diamond', 'line', 'highlighter'].includes(el.type)) {
+    if (el.rotation && el.rotation !== 0 && ['rect', 'image', 'text', 'callout', 'arrow', 'pixelate', 'circle', 'triangle', 'diamond', 'line', 'highlighter'].includes(el.type)) {
          if (el.type === 'highlighter' && (!el.highlighterStyle || el.highlighterStyle === 'brush')) {
              // Brush highlighter no rotation support yet
          } else {
@@ -601,7 +812,7 @@ export const isPointInElement = (x: number, y: number, el: DrawingElement, ctx: 
          }
     }
 
-    if (el.type === 'rect' || el.type === 'image' || el.type === 'text' || el.type === 'arrow' || el.type === 'pixelate') {
+    if (el.type === 'rect' || el.type === 'image' || el.type === 'text' || el.type === 'callout' || el.type === 'spotlight' || el.type === 'arrow' || el.type === 'pixelate') {
         const padding = 5;
         return x >= bx - padding && x <= bx + bw + padding && y >= by - padding && y <= by + bh + padding;
     }
@@ -680,7 +891,7 @@ export const isPointInElement = (x: number, y: number, el: DrawingElement, ctx: 
     }
     else if (el.type === 'stamp') {
         if (el.x !== undefined && el.y !== undefined) {
-            const radius = 10 + el.strokeWidth;
+            const radius = getStampRadius(el);
             if (el.stampStyle === 'square') {
                 return x >= el.x - radius && x <= el.x + radius && y >= el.y - radius && y <= el.y + radius;
             } else {
@@ -690,6 +901,11 @@ export const isPointInElement = (x: number, y: number, el: DrawingElement, ctx: 
             }
         }
         return false;
+    }
+    else if (el.type === 'symbol') {
+        if (el.x === undefined || el.y === undefined) return false;
+        const radius = Math.max(12, el.strokeWidth / 2);
+        return x >= el.x - radius && x <= el.x + radius && y >= el.y - radius && y <= el.y + radius;
     }
     else if ((el.type === 'pen' || el.type === 'highlighter') && el.points) {
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -718,8 +934,13 @@ export const getElementBounds = (el: DrawingElement) => {
     }
     
     if (el.type === 'stamp') {
-        const radius = 10 + el.strokeWidth;
+        const radius = getStampRadius(el);
         return { x: bx - radius, y: by - radius, w: radius * 2, h: radius * 2 };
+    }
+
+    if (el.type === 'symbol') {
+        const size = Math.max(16, el.strokeWidth);
+        return { x: bx - size / 2, y: by - size / 2, w: size, h: size };
     }
 
     if (bw < 0) { bx += bw; bw = Math.abs(bw); }
@@ -736,7 +957,7 @@ export const getResizeHandleType = (x: number, y: number, el: DrawingElement): R
     // Highlight Brush has no handles
     if (el.type === 'highlighter' && (!el.highlighterStyle || el.highlighterStyle === 'brush')) return null;
 
-    if (!['rect', 'text', 'image', 'arrow', 'pixelate', 'circle', 'triangle', 'diamond', 'line', 'highlighter'].includes(el.type)) return null;
+    if (!['rect', 'text', 'callout', 'spotlight', 'image', 'arrow', 'pixelate', 'circle', 'triangle', 'diamond', 'line', 'highlighter'].includes(el.type)) return null;
     
     const handleSize = 12; 
     const half = handleSize / 2;
@@ -784,7 +1005,7 @@ export const getResizeHandleType = (x: number, y: number, el: DrawingElement): R
     if (check(left, midY)) return 'w';
 
     // Rotation Handle (Top Center - 20px)
-    if (check(midX, top - 20)) return 'rotate';
+    if (el.type !== 'spotlight' && check(midX, top - 20)) return 'rotate';
 
     return null;
 }

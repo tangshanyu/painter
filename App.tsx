@@ -3,17 +3,25 @@ import { Minus, Plus, Maximize, PanelTopOpen } from 'lucide-react';
 import TabList from './components/TabList';
 import Toolbar from './components/Toolbar';
 import Editor from './components/Editor';
+import LayerPanel from './components/LayerPanel';
+import PropertiesPanel from './components/PropertiesPanel';
 import ExportDialog, { ExportOptions } from './components/ExportDialog';
 import CanvasSpaceDialog, { CanvasEdge } from './components/CanvasSpaceDialog';
 import { TabData, ToolType, ToolSettings, DrawingElement } from './types';
-import { DEFAULT_TOOL_SETTINGS } from './constants';
-import { blobToDataURL, renderCanvas } from './utils/draw';
+import { DEFAULT_TOOL_SETTINGS, DEFAULT_TOOL_SIZES } from './constants';
+import { blobToDataURL, getElementBounds, renderCanvas } from './utils/draw';
 import { createDocumentSnapshot, createInitialSnapshot } from './utils/history';
 import { loadWorkspace, saveWorkspace } from './utils/storage';
 import { resizeCanvasDocument } from './utils/canvasResize';
 
 const DEFAULT_WIDTH = 800;
 const DEFAULT_HEIGHT = 600;
+const normalizeStampSize = (size: number | undefined) => {
+  const fallback = DEFAULT_TOOL_SIZES.stamp ?? 32;
+  if (size === undefined) return fallback;
+  return size < 20 ? (10 + size) * 2 : size;
+};
+const getStampDiameter = (element: DrawingElement) => element.stampSize ?? (10 + element.strokeWidth) * 2;
 
 // Add type definition for the global function called by Java
 declare global {
@@ -26,7 +34,7 @@ function App() {
   const [tabCounter, setTabCounter] = useState(1);
   const [darkMode, setDarkMode] = useState(false);
   const [stampCounter, setStampCounter] = useState(1);
-  const [clipboardElement, setClipboardElement] = useState<DrawingElement | null>(null);
+  const [clipboardElements, setClipboardElements] = useState<DrawingElement[]>([]);
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading');
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
@@ -112,7 +120,11 @@ function App() {
   
   const [activeTool, setActiveTool] = useState<ToolType>('select');
   const [toolSettings, setToolSettings] = useState<ToolSettings>(DEFAULT_TOOL_SETTINGS);
-  const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
+  const [selectedElementIds, setSelectedElementIds] = useState<string[]>([]);
+  const selectedElementId = selectedElementIds[selectedElementIds.length - 1] ?? null;
+  const setSelectedElementId = useCallback((id: string | null) => {
+    setSelectedElementIds(id ? [id] : []);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -125,7 +137,15 @@ function App() {
         setTabCounter(saved.tabCounter);
         setStampCounter(saved.stampCounter);
         setDarkMode(saved.darkMode);
-        setToolSettings(saved.toolSettings);
+        setToolSettings({
+          ...DEFAULT_TOOL_SETTINGS,
+          ...saved.toolSettings,
+          toolSizes: {
+            ...DEFAULT_TOOL_SIZES,
+            ...(saved.toolSettings.toolSizes || {}),
+            stamp: normalizeStampSize(saved.toolSettings.toolSizes?.stamp),
+          },
+        });
       } catch (error) {
         console.warn('Unable to restore the local workspace', error);
       } finally {
@@ -169,10 +189,23 @@ function App() {
   }, [workspaceReady, tabs, activeTabId, tabCounter, stampCounter, darkMode, toolSettings]);
 
   const activeTab = tabs.find(t => t.id === activeTabId) || tabs[0];
+  const selectedElements = selectedElementIds
+      .map(id => activeTab.elements.find(element => element.id === id))
+      .filter((element): element is DrawingElement => Boolean(element));
 
   const updateTab = useCallback((id: string, updates: Partial<TabData>) => {
     setTabs(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
   }, []);
+
+  const commitElements = useCallback((elements: DrawingElement[]) => {
+    const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
+    newHistory.push(createDocumentSnapshot(activeTab, { elements }));
+    updateTab(activeTabId, {
+      elements,
+      history: newHistory,
+      historyIndex: newHistory.length - 1,
+    });
+  }, [activeTab, activeTabId, updateTab]);
 
   const handleRenameTab = (id: string, newTitle: string) => {
       updateTab(id, { title: newTitle });
@@ -196,32 +229,72 @@ function App() {
             setToolSettings(prev => ({
                 ...prev,
                 color: el.color,
-                strokeWidth: el.strokeWidth,
-                arrowStyle: el.arrowStyle || 'filled'
+                strokeWidth: el.type === 'stamp' ? getStampDiameter(el) : el.strokeWidth,
+                fontSize: el.type === 'text' || el.type === 'callout' ? (el.fontSize ?? el.strokeWidth * 6) : prev.fontSize,
+                arrowStyle: el.arrowStyle ?? prev.arrowStyle,
+                stampStyle: el.stampStyle ?? prev.stampStyle,
+                symbol: el.symbol ?? prev.symbol,
+                pixelateStyle: el.pixelateStyle ?? prev.pixelateStyle,
+                highlighterStyle: el.highlighterStyle ?? prev.highlighterStyle,
             }));
         }
     }
   }, [selectedElementId, activeTab.elements]);
 
   const handleToolSettingsChange = (newSettings: ToolSettings) => {
-      setToolSettings(newSettings);
+      const selectedElement = selectedElementId
+          ? activeTab.elements.find(element => element.id === selectedElementId)
+          : undefined;
+      const sizeOwner = selectedElement && selectedElement.type !== 'image'
+          ? selectedElement.type
+          : activeTool;
+      const activeToolSize = sizeOwner === 'text' || sizeOwner === 'callout' ? newSettings.fontSize : newSettings.strokeWidth;
+      const shouldRememberSize = DEFAULT_TOOL_SIZES[sizeOwner] !== undefined;
+      const nextSettings = shouldRememberSize
+          ? {
+              ...newSettings,
+              toolSizes: {
+                  ...newSettings.toolSizes,
+                  [sizeOwner]: activeToolSize,
+              },
+          }
+          : newSettings;
+
+      setToolSettings(nextSettings);
       if (selectedElementId) {
           const updatedElements = activeTab.elements.map(el => {
               if (el.id === selectedElementId) {
-                  return { 
-                      ...el, 
-                      color: newSettings.color, 
-                      strokeWidth: newSettings.strokeWidth,
-                      arrowStyle: newSettings.arrowStyle
+                  const isText = el.type === 'text' || el.type === 'callout';
+                  return {
+                      ...el,
+                      color: nextSettings.color,
+                      strokeWidth: el.type === 'callout'
+                          ? Math.min(4, Math.max(2, nextSettings.fontSize / 8))
+                          : isText ? Math.max(1, nextSettings.fontSize / 6) : nextSettings.strokeWidth,
+                      fontSize: isText ? nextSettings.fontSize : el.fontSize,
+                      stampSize: el.type === 'stamp' ? nextSettings.strokeWidth : el.stampSize,
+                      arrowStyle: el.type === 'arrow' ? nextSettings.arrowStyle : el.arrowStyle,
+                      stampStyle: el.type === 'stamp' ? nextSettings.stampStyle : el.stampStyle,
+                      symbol: el.type === 'symbol' ? nextSettings.symbol : el.symbol,
+                      pixelateStyle: el.type === 'pixelate' ? nextSettings.pixelateStyle : el.pixelateStyle,
+                      highlighterStyle: el.type === 'highlighter' ? nextSettings.highlighterStyle : el.highlighterStyle,
                   };
               }
               return el;
           });
           const currentEl = activeTab.elements.find(e => e.id === selectedElementId);
           if (currentEl && (
-              currentEl.color !== newSettings.color || 
-              currentEl.strokeWidth !== newSettings.strokeWidth ||
-              currentEl.arrowStyle !== newSettings.arrowStyle
+              currentEl.color !== nextSettings.color ||
+              (currentEl.type === 'text' || currentEl.type === 'callout'
+                  ? (currentEl.fontSize ?? currentEl.strokeWidth * 6) !== nextSettings.fontSize
+                  : currentEl.type === 'stamp'
+                    ? getStampDiameter(currentEl) !== nextSettings.strokeWidth
+                    : currentEl.strokeWidth !== nextSettings.strokeWidth) ||
+              (currentEl.type === 'arrow' && currentEl.arrowStyle !== nextSettings.arrowStyle) ||
+              (currentEl.type === 'stamp' && currentEl.stampStyle !== nextSettings.stampStyle) ||
+              (currentEl.type === 'symbol' && currentEl.symbol !== nextSettings.symbol) ||
+              (currentEl.type === 'pixelate' && currentEl.pixelateStyle !== nextSettings.pixelateStyle) ||
+              (currentEl.type === 'highlighter' && currentEl.highlighterStyle !== nextSettings.highlighterStyle)
              )) {
              const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
              newHistory.push(createDocumentSnapshot(activeTab, { elements: updatedElements }));
@@ -234,11 +307,33 @@ function App() {
       }
   };
 
+  const handleToolSelect = (tool: ToolType) => {
+      setActiveTool(tool);
+      setSelectedElementId(null);
+      setToolSettings(previous => {
+          const storedSize = previous.toolSizes?.[tool] ?? DEFAULT_TOOL_SIZES[tool];
+          const rememberedSize = tool === 'stamp' ? normalizeStampSize(storedSize) : storedSize;
+          if (rememberedSize === undefined) return previous;
+          return tool === 'text' || tool === 'callout'
+              ? { ...previous, fontSize: rememberedSize }
+              : {
+                  ...previous,
+                  strokeWidth: rememberedSize,
+                  toolSizes: tool === 'stamp'
+                      ? { ...previous.toolSizes, stamp: rememberedSize }
+                      : previous.toolSizes,
+                };
+      });
+  };
+
   const handleToggleLock = () => {
-    if (selectedElementId) {
+    if (selectedElementIds.length > 0) {
+        const allLocked = activeTab.elements
+            .filter(element => selectedElementIds.includes(element.id))
+            .every(element => element.locked);
         const updatedElements = activeTab.elements.map(el => {
-            if (el.id === selectedElementId) {
-                return { ...el, locked: !el.locked };
+            if (selectedElementIds.includes(el.id)) {
+                return { ...el, locked: !allLocked };
             }
             return el;
         });
@@ -251,6 +346,153 @@ function App() {
             historyIndex: newHistory.length - 1
         });
     }
+  };
+
+  const handleRenameLayer = (id: string, name: string) => {
+      const element = activeTab.elements.find(item => item.id === id);
+      if (!element || element.name === name) return;
+      commitElements(activeTab.elements.map(item => item.id === id ? { ...item, name } : item));
+  };
+
+  const handleToggleLayerVisibility = (id: string) => {
+      const element = activeTab.elements.find(item => item.id === id);
+      if (!element) return;
+      commitElements(activeTab.elements.map(item => item.id === id ? { ...item, hidden: !item.hidden } : item));
+      if (!element.hidden) setSelectedElementIds(current => current.filter(selectedId => selectedId !== id));
+  };
+
+  const handleToggleLayerLock = (id: string) => {
+      const element = activeTab.elements.find(item => item.id === id);
+      if (!element) return;
+      commitElements(activeTab.elements.map(item => item.id === id ? { ...item, locked: !item.locked } : item));
+  };
+
+  const handleReorderLayer = (sourceId: string, targetId: string) => {
+      const sourceIndex = activeTab.elements.findIndex(element => element.id === sourceId);
+      const targetIndex = activeTab.elements.findIndex(element => element.id === targetId);
+      if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return;
+      const elements = [...activeTab.elements];
+      const [source] = elements.splice(sourceIndex, 1);
+      const insertionIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+      elements.splice(insertionIndex, 0, source);
+      commitElements(elements);
+  };
+
+  const handleDuplicateSelected = useCallback(() => {
+      if (selectedElementIds.length === 0) return;
+      const timestamp = Date.now();
+      const copies = activeTab.elements
+          .filter(element => selectedElementIds.includes(element.id))
+          .map((element, index) => ({
+              ...element,
+              id: `${timestamp}-${index}`,
+              name: element.name ? `${element.name} copy` : undefined,
+              x: element.x === undefined ? undefined : element.x + 20,
+              y: element.y === undefined ? undefined : element.y + 20,
+              points: element.points?.map(point => ({ x: point.x + 20, y: point.y + 20 })),
+              locked: false,
+          }));
+      commitElements([...activeTab.elements, ...copies]);
+      setSelectedElementIds(copies.map(element => element.id));
+  }, [activeTab.elements, commitElements, selectedElementIds]);
+
+  const handleGeometryChange = (id: string, values: { x?: number; y?: number; width?: number; height?: number }) => {
+      const target = activeTab.elements.find(element => element.id === id);
+      if (!target || target.locked) return;
+      const bounds = getElementBounds(target);
+      const nextX = values.x ?? bounds.x;
+      const nextY = values.y ?? bounds.y;
+      const nextWidth = values.width ?? bounds.w;
+      const nextHeight = values.height ?? bounds.h;
+      const scaleX = bounds.w > 0 ? nextWidth / bounds.w : 1;
+      const scaleY = bounds.h > 0 ? nextHeight / bounds.h : 1;
+
+      const updatedElements = activeTab.elements.map(element => {
+          if (element.id !== id) return element;
+          const updated = { ...element };
+          if (updated.points) {
+              updated.points = updated.points.map(point => ({
+                  x: nextX + (point.x - bounds.x) * scaleX,
+                  y: nextY + (point.y - bounds.y) * scaleY,
+              }));
+          } else if (updated.type === 'stamp' || updated.type === 'symbol') {
+              const requestedSize = values.width ?? values.height ?? Math.max(bounds.w, bounds.h);
+              updated.x = nextX + requestedSize / 2;
+              updated.y = nextY + requestedSize / 2;
+              if (updated.type === 'stamp') {
+                  updated.stampSize = requestedSize;
+                  updated.strokeWidth = requestedSize;
+              } else {
+                  updated.strokeWidth = Math.max(8, requestedSize);
+              }
+          } else {
+              updated.x = nextX + ((updated.x || 0) - bounds.x) * scaleX;
+              updated.y = nextY + ((updated.y || 0) - bounds.y) * scaleY;
+              if (updated.width !== undefined) updated.width *= scaleX;
+              if (updated.height !== undefined) updated.height *= scaleY;
+          }
+          return updated;
+      });
+      commitElements(updatedElements);
+  };
+
+  const handleSelectedStyleChange = (values: Partial<DrawingElement>) => {
+      if (selectedElementIds.length === 0) return;
+      const updatedElements = activeTab.elements.map(element => {
+          if (!selectedElementIds.includes(element.id) || element.locked) return element;
+          const updated = { ...element, ...values };
+          if (element.type === 'stamp' && values.strokeWidth !== undefined) updated.stampSize = values.strokeWidth;
+          if (values.fontSize !== undefined) {
+              updated.strokeWidth = element.type === 'callout'
+                  ? Math.min(4, Math.max(2, values.fontSize / 8))
+                  : element.type === 'text' ? Math.max(1, values.fontSize / 6) : updated.strokeWidth;
+          }
+          return updated;
+      });
+      commitElements(updatedElements);
+  };
+
+  const handleAlignSelection = (action: 'left' | 'centerX' | 'right' | 'top' | 'centerY' | 'bottom') => {
+      const selectedElements = activeTab.elements.filter(element => selectedElementIds.includes(element.id));
+      if (selectedElements.length < 2) return;
+
+      const bounds = selectedElements.map(element => ({ element, bounds: getElementBounds(element) }));
+      const minX = Math.min(...bounds.map(item => item.bounds.x));
+      const minY = Math.min(...bounds.map(item => item.bounds.y));
+      const maxX = Math.max(...bounds.map(item => item.bounds.x + item.bounds.w));
+      const maxY = Math.max(...bounds.map(item => item.bounds.y + item.bounds.h));
+      const groupCenterX = (minX + maxX) / 2;
+      const groupCenterY = (minY + maxY) / 2;
+
+      const updatedElements = activeTab.elements.map(element => {
+          if (!selectedElementIds.includes(element.id) || element.locked) return element;
+          const box = getElementBounds(element);
+          let dx = 0;
+          let dy = 0;
+          if (action === 'left') dx = minX - box.x;
+          if (action === 'centerX') dx = groupCenterX - (box.x + box.w / 2);
+          if (action === 'right') dx = maxX - (box.x + box.w);
+          if (action === 'top') dy = minY - box.y;
+          if (action === 'centerY') dy = groupCenterY - (box.y + box.h / 2);
+          if (action === 'bottom') dy = maxY - (box.y + box.h);
+
+          const translated = { ...element };
+          if (translated.points) {
+              translated.points = translated.points.map(point => ({ x: point.x + dx, y: point.y + dy }));
+          } else {
+              translated.x = (translated.x || 0) + dx;
+              translated.y = (translated.y || 0) + dy;
+          }
+          return translated;
+      });
+
+      const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
+      newHistory.push(createDocumentSnapshot(activeTab, { elements: updatedElements }));
+      updateTab(activeTabId, {
+          elements: updatedElements,
+          history: newHistory,
+          historyIndex: newHistory.length - 1,
+      });
   };
 
   const handleLayerOrder = (action: 'front' | 'back' | 'forward' | 'backward') => {
@@ -542,19 +784,19 @@ function App() {
     const target = e.target as HTMLElement;
     if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
 
-    if (clipboardElement) {
+    if (clipboardElements.length > 0) {
         e.preventDefault();
         const offset = 20;
-        const newEl = { 
-            ...clipboardElement, 
-            id: Date.now().toString(),
-            x: (clipboardElement.x || 0) + offset,
-            y: (clipboardElement.y || 0) + offset
-        };
-        if (newEl.points) {
-            newEl.points = newEl.points.map(p => ({ x: p.x + offset, y: p.y + offset }));
-        }
-        const newElements = [...activeTab.elements, newEl];
+        const timestamp = Date.now();
+        const pastedElements = clipboardElements.map((element, index) => ({
+            ...element,
+            id: `${timestamp}-${index}`,
+            x: element.x === undefined ? undefined : element.x + offset,
+            y: element.y === undefined ? undefined : element.y + offset,
+            points: element.points?.map(point => ({ x: point.x + offset, y: point.y + offset })),
+            locked: false,
+        }));
+        const newElements = [...activeTab.elements, ...pastedElements];
         const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
         newHistory.push(createDocumentSnapshot(activeTab, { elements: newElements }));
         updateTab(activeTabId, { 
@@ -562,7 +804,7 @@ function App() {
             history: newHistory,
             historyIndex: newHistory.length - 1
         });
-        setSelectedElementId(newEl.id);
+        setSelectedElementIds(pastedElements.map(element => element.id));
         return;
     }
 
@@ -580,7 +822,7 @@ function App() {
             }
         }
     }
-  }, [clipboardElement, pasteImageFromSystemClipboard, processImageBlob, activeTab.elements, activeTab.history, activeTab.historyIndex, activeTabId, updateTab]);
+  }, [clipboardElements, pasteImageFromSystemClipboard, processImageBlob, activeTab.elements, activeTab.history, activeTab.historyIndex, activeTabId, updateTab]);
 
   useEffect(() => {
     window.addEventListener('paste', handlePaste);
@@ -618,8 +860,8 @@ function App() {
   }, [activeTab, activeTabId, updateTab]);
 
   const handleDeleteSelected = useCallback(() => {
-      if (selectedElementId) {
-          const newElements = activeTab.elements.filter(el => el.id !== selectedElementId);
+      if (selectedElementIds.length > 0) {
+          const newElements = activeTab.elements.filter(el => !selectedElementIds.includes(el.id));
           const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
           newHistory.push(createDocumentSnapshot(activeTab, { elements: newElements }));
           updateTab(activeTabId, {
@@ -629,18 +871,15 @@ function App() {
           });
           setSelectedElementId(null);
       }
-  }, [selectedElementId, activeTab, activeTabId, updateTab]);
+  }, [selectedElementIds, activeTab, activeTabId, updateTab, setSelectedElementId]);
 
   const handleCopy = async () => {
-      if (selectedElementId) {
-          const el = activeTab.elements.find(e => e.id === selectedElementId);
-          if (el) {
-              setClipboardElement(el);
-          }
+      if (selectedElementIds.length > 0) {
+          setClipboardElements(activeTab.elements.filter(element => selectedElementIds.includes(element.id)));
           return;
       }
       setSelectedElementId(null);
-      setClipboardElement(null); 
+      setClipboardElements([]);
       setTimeout(() => {
           const canvas = document.querySelector('canvas');
           if (canvas) {
@@ -729,6 +968,11 @@ function App() {
                   e.preventDefault();
                   handleCopy();
               }
+          } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'd') {
+              if (!isInput) {
+                  e.preventDefault();
+                  handleDuplicateSelected();
+              }
           } else if ((e.altKey) && (e.key === 's' || e.key === 'S')) {
                // Alt + S for Screenshot
                e.preventDefault();
@@ -744,7 +988,7 @@ function App() {
       };
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [performUndo, performRedo, handleDeleteSelected, handleCopy]);
+  }, [performUndo, performRedo, handleDeleteSelected, handleCopy, handleDuplicateSelected]);
 
   const handleClearAll = () => {
       if (window.confirm('Clear all drawings and layers? (Background image will remain)')) {
@@ -855,12 +1099,13 @@ function App() {
       
       <Toolbar 
         currentTool={activeTool}
-        setTool={(t) => { setActiveTool(t); setSelectedElementId(null); }}
+        setTool={handleToolSelect}
         settings={toolSettings}
         setSettings={handleToolSettingsChange}
         canUndo={activeTab.historyIndex > 0}
         canRedo={activeTab.historyIndex < activeTab.history.length - 1}
-        hasSelection={!!selectedElementId}
+        hasSelection={selectedElementIds.length > 0}
+        selectionCount={selectedElementIds.length}
         selectedElement={selectedElementId ? activeTab.elements.find(e => e.id === selectedElementId) : undefined}
         onUndo={performUndo}
         onRedo={performRedo}
@@ -873,6 +1118,7 @@ function App() {
         onCopy={handleCopy}
         onToggleLock={handleToggleLock}
         onLayerOrder={handleLayerOrder}
+        onAlign={handleAlignSelection}
         darkMode={darkMode}
         toggleDarkMode={() => setDarkMode(!darkMode)}
         stampCounter={stampCounter}
@@ -888,23 +1134,47 @@ function App() {
         multiple
       />
 
-      <Editor 
-        key={activeTabId} 
-        tab={activeTab} 
-        activeTool={activeTool} 
-        toolSettings={toolSettings} 
-        updateTab={updateTab}
-        selectedElementId={selectedElementId}
-        setSelectedElementId={setSelectedElementId}
-        stampCounter={stampCounter}
-        onStamp={() => setStampCounter(c => c + 1)}
-        onCrop={handleCrop}
-        onOpenFile={handleOpenFileClick}
-        onPasteImage={handlePasteImageClick}
-        onScreenCapture={handleScreenCapture}
-        onImageDrop={processImageBlob}
-        onAddCanvasSpace={handleAddCanvasSpace}
-      />
+      <div className="flex min-h-0 flex-1">
+        <LayerPanel
+          elements={activeTab.elements}
+          selectedIds={selectedElementIds}
+          onSelect={setSelectedElementIds}
+          onRename={handleRenameLayer}
+          onToggleVisibility={handleToggleLayerVisibility}
+          onToggleLock={handleToggleLayerLock}
+          onReorder={handleReorderLayer}
+          onDuplicate={handleDuplicateSelected}
+          onDelete={handleDeleteSelected}
+        />
+
+        <Editor
+          key={activeTabId}
+          tab={activeTab}
+          activeTool={activeTool}
+          toolSettings={toolSettings}
+          updateTab={updateTab}
+          selectedElementId={selectedElementId}
+          setSelectedElementId={setSelectedElementId}
+          selectedElementIds={selectedElementIds}
+          setSelectedElementIds={setSelectedElementIds}
+          stampCounter={stampCounter}
+          onStamp={() => setStampCounter(c => c + 1)}
+          onCrop={handleCrop}
+          onOpenFile={handleOpenFileClick}
+          onPasteImage={handlePasteImageClick}
+          onScreenCapture={handleScreenCapture}
+          onImageDrop={processImageBlob}
+          onAddCanvasSpace={handleAddCanvasSpace}
+        />
+
+        <PropertiesPanel
+          selectedElements={selectedElements}
+          onGeometryChange={handleGeometryChange}
+          onStyleChange={handleSelectedStyleChange}
+          onDuplicate={handleDuplicateSelected}
+          onDelete={handleDeleteSelected}
+        />
+      </div>
       
       <div className="bg-brand-50 dark:bg-slate-800 border-t border-brand-100 dark:border-slate-700 px-3 py-1 text-xs text-brand-800 dark:text-brand-300 flex justify-between items-center select-none font-medium z-10 h-7 transition-colors">
          <div className="flex gap-1 items-center">
@@ -977,6 +1247,10 @@ function App() {
 
          <div className="flex gap-3 opacity-75 hidden md:flex text-[10px]">
              <span>Esc: Select</span>
+             <span>Shift+Click: Multi-select</span>
+             <span>Drag: Box select</span>
+             <span>Alt+Drag: No snap</span>
+             <span>Ctrl+D: Duplicate</span>
              <span>Alt+S: Capture</span>
              <span>Del: Delete</span>
              <span>Ctrl+C: Copy</span>

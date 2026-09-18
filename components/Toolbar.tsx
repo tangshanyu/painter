@@ -32,9 +32,14 @@ import {
   Droplets,
   Brush,
   FolderOpen,
-  MonitorUp
+  MonitorUp,
+  Hand,
+  MessageSquareText,
+  Focus,
+  SmilePlus,
+  Star
 } from 'lucide-react';
-import { ToolType, ToolSettings, DrawingElement } from '../types';
+import { ToolType, ToolSettings, DrawingElement, StampStyle } from '../types';
 import { COLORS } from '../constants';
 
 interface ToolbarProps {
@@ -45,6 +50,7 @@ interface ToolbarProps {
   canUndo: boolean;
   canRedo: boolean;
   hasSelection: boolean;
+  selectionCount: number;
   selectedElement?: DrawingElement; 
   onUndo: () => void;
   onRedo: () => void;
@@ -57,6 +63,7 @@ interface ToolbarProps {
   onClearAll: () => void;
   onToggleLock: () => void;
   onLayerOrder: (action: 'front' | 'back' | 'forward' | 'backward') => void;
+  onAlign: (action: 'left' | 'centerX' | 'right' | 'top' | 'centerY' | 'bottom') => void;
   darkMode: boolean;
   toggleDarkMode: () => void;
   stampCounter: number;
@@ -71,6 +78,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
   canUndo,
   canRedo,
   hasSelection,
+  selectionCount,
   selectedElement,
   onUndo,
   onRedo,
@@ -83,13 +91,36 @@ const Toolbar: React.FC<ToolbarProps> = ({
   onClearAll,
   onToggleLock,
   onLayerOrder,
+  onAlign,
   darkMode,
   toggleDarkMode,
   stampCounter,
   setStampCounter
 }) => {
   const toolbarRef = useRef<HTMLDivElement>(null);
-  const [openPopover, setOpenPopover] = useState<'draw' | 'shape' | 'color' | 'size' | null>(null);
+  const [openPopover, setOpenPopover] = useState<'draw' | 'shape' | 'color' | 'size' | 'symbols' | null>(null);
+  const [symbolSearch, setSymbolSearch] = useState('');
+  const [symbolCategory, setSymbolCategory] = useState<'all' | 'marks' | 'hands' | 'status' | 'emoji' | 'recent' | 'favorites'>('all');
+  const [recentSymbols, setRecentSymbols] = useState<string[]>(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem('painter-recent-symbols') || '[]');
+      return Array.isArray(stored) ? stored.filter(value => typeof value === 'string') : [];
+    } catch { return []; }
+  });
+  const [favoriteSymbols, setFavoriteSymbols] = useState<string[]>(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem('painter-favorite-symbols') || '[]');
+      return Array.isArray(stored) ? stored.filter(value => typeof value === 'string') : [];
+    } catch { return []; }
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem('painter-recent-symbols', JSON.stringify(recentSymbols)); } catch { /* Storage can be unavailable in private contexts. */ }
+  }, [recentSymbols]);
+
+  useEffect(() => {
+    try { localStorage.setItem('painter-favorite-symbols', JSON.stringify(favoriteSymbols)); } catch { /* Storage can be unavailable in private contexts. */ }
+  }, [favoriteSymbols]);
 
   useEffect(() => {
     const closeOnOutsideClick = (event: PointerEvent) => {
@@ -111,19 +142,22 @@ const Toolbar: React.FC<ToolbarProps> = ({
     setOpenPopover(null);
   };
 
-  const togglePopover = (popover: 'draw' | 'shape' | 'color' | 'size') => {
+  const togglePopover = (popover: 'draw' | 'shape' | 'color' | 'size' | 'symbols') => {
     setOpenPopover(current => current === popover ? null : popover);
   };
   
   // Tools that appear directly on the bar (Standalone)
   const mainTools = [
     { id: 'select', icon: MousePointer2, label: 'Select' }, 
+    { id: 'hand', icon: Hand, label: 'Pan canvas' },
     { id: 'crop', icon: Crop, label: 'Crop Tool' },
     { id: 'eraser', icon: Eraser, label: 'Area Eraser' },
     // Pen, Highlighter, Pixelate moved to drawTools group
     { id: 'arrow', icon: MoveUpRight, label: 'Arrow' },
     { id: 'stamp', icon: Stamp, label: 'Stamp' },
     { id: 'text', icon: Type, label: 'Text' },
+    { id: 'callout', icon: MessageSquareText, label: 'Callout' },
+    { id: 'spotlight', icon: Focus, label: 'Spotlight' },
   ] as const;
 
   // New Group: Drawing & Effects
@@ -166,16 +200,106 @@ const Toolbar: React.FC<ToolbarProps> = ({
 
   const activeShapeDef = shapeTools.find(t => t.id === lastShape) || shapeTools[0];
 
-  const DOT_SIZES = [2, 4, 8, 12, 20];
-  
+  const DEFAULT_SIZES = [2, 4, 8, 12, 20];
+  const WIDE_SIZES = [4, 8, 12, 20, 32];
+  const STAMP_SIZES = [24, 32, 48, 64, 96];
+  const SYMBOL_SIZES = [24, 32, 48, 64, 96];
   const TEXT_SIZES = [
-      { label: '12px', value: 2 },
-      { label: '18px', value: 3 },
-      { label: '24px', value: 4 },
-      { label: '36px', value: 6 },
-      { label: '48px', value: 8 },
-      { label: '72px', value: 12 },
+      12, 18, 24, 36, 48, 72,
   ];
+
+  const sizeTarget = selectedElement?.type ?? currentTool;
+  const supportsSize = ['pen', 'highlighter', 'rect', 'circle', 'triangle', 'diamond', 'line', 'arrow', 'text', 'callout', 'stamp', 'symbol', 'pixelate'].includes(sizeTarget);
+  const isTextSize = sizeTarget === 'text' || sizeTarget === 'callout';
+  const rawCurrentSize = isTextSize ? settings.fontSize : settings.strokeWidth;
+  const currentSize = sizeTarget === 'stamp' && rawCurrentSize < 20 ? (10 + rawCurrentSize) * 2 : rawCurrentSize;
+  const sizePresets = sizeTarget === 'stamp'
+    ? STAMP_SIZES
+    : sizeTarget === 'symbol'
+      ? SYMBOL_SIZES
+      : sizeTarget === 'highlighter' || sizeTarget === 'pixelate'
+        ? WIDE_SIZES
+        : DEFAULT_SIZES;
+  const sizeLabel = isTextSize
+    ? 'Font size'
+    : sizeTarget === 'pixelate'
+      ? 'Mosaic / blur size'
+      : sizeTarget === 'stamp'
+        ? 'Stamp size'
+        : sizeTarget === 'symbol'
+          ? 'Symbol size'
+          : sizeTarget === 'highlighter'
+            ? 'Highlighter width'
+            : 'Stroke width';
+  const contextualTool = selectedElement?.type ?? currentTool;
+  const stampStyles: Array<{ id: StampStyle; label: string }> = [
+    { id: 'circle', label: 'Circle stamp' },
+    { id: 'square', label: 'Square stamp' },
+    { id: 'rounded', label: 'Rounded stamp' },
+    { id: 'diamond', label: 'Diamond stamp' },
+    { id: 'plain', label: 'Number only' },
+  ];
+  const symbols = [
+    { value: '✓', label: 'Check', category: 'marks' },
+    { value: '✕', label: 'Cross', category: 'marks' },
+    { value: '☐', label: 'Checkbox', category: 'marks' },
+    { value: '☑', label: 'Checked box', category: 'marks' },
+    { value: '★', label: 'Star', category: 'marks' },
+    { value: '●', label: 'Dot', category: 'marks' },
+    { value: '→', label: 'Right arrow', category: 'marks' },
+    { value: '←', label: 'Left arrow', category: 'marks' },
+    { value: '⚠️', label: 'Warning', category: 'status' },
+    { value: 'ℹ️', label: 'Information', category: 'status' },
+    { value: '❗', label: 'Exclamation', category: 'status' },
+    { value: '❓', label: 'Question', category: 'status' },
+    { value: '🚫', label: 'Forbidden', category: 'status' },
+    { value: '🎯', label: 'Target', category: 'status' },
+    { value: '💡', label: 'Idea', category: 'status' },
+    { value: '🚀', label: 'Rocket', category: 'status' },
+    { value: '👉', label: 'Point right', category: 'hands' },
+    { value: '👈', label: 'Point left', category: 'hands' },
+    { value: '👆', label: 'Point up', category: 'hands' },
+    { value: '👇', label: 'Point down', category: 'hands' },
+    { value: '👍', label: 'Thumbs up', category: 'hands' },
+    { value: '👎', label: 'Thumbs down', category: 'hands' },
+    { value: '👌', label: 'OK hand', category: 'hands' },
+    { value: '👏', label: 'Clap', category: 'hands' },
+    { value: '😀', label: 'Smile', category: 'emoji' },
+    { value: '😊', label: 'Happy', category: 'emoji' },
+    { value: '🤔', label: 'Thinking', category: 'emoji' },
+    { value: '😮', label: 'Surprised', category: 'emoji' },
+    { value: '❤️', label: 'Heart', category: 'emoji' },
+    { value: '🔥', label: 'Fire', category: 'emoji' },
+    { value: '🎉', label: 'Celebrate', category: 'emoji' },
+    { value: '📌', label: 'Pin', category: 'emoji' },
+  ];
+  const customSavedSymbols = [...new Set([...recentSymbols, ...favoriteSymbols])]
+    .filter(value => !symbols.some(item => item.value === value))
+    .map(value => ({ value, label: `Custom ${value}`, category: 'emoji' }));
+  const availableSymbols = [...symbols, ...customSavedSymbols];
+  const normalizedSearch = symbolSearch.trim().toLowerCase();
+  const customSymbol = symbolSearch.trim();
+  const canUseCustomSymbol = customSymbol.length > 0 && Array.from(customSymbol).length <= 4 && !/^[a-z0-9 ]+$/i.test(customSymbol);
+  const filteredSymbols = availableSymbols.filter(item => {
+    const categoryMatch = symbolCategory === 'all'
+      || (symbolCategory === 'recent' && recentSymbols.includes(item.value))
+      || (symbolCategory === 'favorites' && favoriteSymbols.includes(item.value))
+      || item.category === symbolCategory;
+    return categoryMatch && (!normalizedSearch || item.label.toLowerCase().includes(normalizedSearch) || item.value.includes(symbolSearch.trim()));
+  }).sort((a, b) => {
+    if (symbolCategory === 'recent') return recentSymbols.indexOf(a.value) - recentSymbols.indexOf(b.value);
+    return 0;
+  });
+
+  const chooseSymbol = (value: string) => {
+    setSettings({ ...settings, symbol: value });
+    setRecentSymbols(current => [value, ...current.filter(symbol => symbol !== value)].slice(0, 12));
+    setOpenPopover(null);
+  };
+
+  const toggleFavoriteSymbol = (value: string) => {
+    setFavoriteSymbols(current => current.includes(value) ? current.filter(symbol => symbol !== value) : [...current, value]);
+  };
 
   // Glass panel style
   const glassPanelClass = "absolute top-full mt-2 left-1/2 -translate-x-1/2 p-3 rounded-2xl backdrop-blur-xl bg-white/90 dark:bg-slate-800/95 border border-white/50 dark:border-slate-600/50 shadow-2xl ring-1 ring-black/5 flex flex-wrap gap-2 min-w-[180px] justify-center z-50";
@@ -186,8 +310,8 @@ const Toolbar: React.FC<ToolbarProps> = ({
       {/* Tools Group */}
       <div className="flex bg-slate-100 dark:bg-slate-700 p-0.5 rounded-lg gap-0.5 shrink-0">
         
-        {/* Render Select, Crop, Eraser first */}
-        {mainTools.slice(0, 3).map((t) => (
+        {/* Render Select, Hand, Crop, Eraser first */}
+        {mainTools.slice(0, 4).map((t) => (
           <button
             key={t.id}
             onClick={() => selectTool(t.id as ToolType)}
@@ -282,8 +406,8 @@ const Toolbar: React.FC<ToolbarProps> = ({
             </div>}
         </div>
 
-        {/* Render remaining tools (Arrow, Stamp, Text) */}
-        {mainTools.slice(3).map((t) => (
+        {/* Render remaining direct tools */}
+        {mainTools.slice(4).map((t) => (
           <button
             key={t.id}
             onClick={() => selectTool(t.id as ToolType)}
@@ -297,6 +421,80 @@ const Toolbar: React.FC<ToolbarProps> = ({
             <t.icon size={18} />
           </button>
         ))}
+
+        <div className="relative">
+          <button
+            onClick={() => {
+              setTool('symbol');
+              togglePopover('symbols');
+            }}
+            aria-expanded={openPopover === 'symbols'}
+            title="Icons & symbols"
+            className={`p-1.5 rounded-md transition-all flex items-center justify-center ${
+              currentTool === 'symbol'
+                ? 'bg-white dark:bg-slate-600 shadow text-brand-600 dark:text-brand-400 ring-1 ring-black/5 dark:ring-white/10'
+                : 'text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600'
+            }`}
+          >
+            <SmilePlus size={18} />
+          </button>
+
+          {openPopover === 'symbols' && (
+            <div className={`${glassPanelClass} w-[340px] flex-col flex-nowrap items-stretch`}>
+              <div className="w-full text-xs text-center font-medium text-slate-500 dark:text-slate-300">Icons, symbols & Emoji</div>
+              <input
+                autoFocus
+                value={symbolSearch}
+                onChange={event => setSymbolSearch(event.target.value)}
+                placeholder="Search or paste an emoji…"
+                className="h-8 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-700 outline-none focus:border-brand-400 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100"
+              />
+              <div className="flex w-full gap-1 overflow-x-auto pb-1">
+                {([
+                  ['all', 'All'], ['marks', 'Marks'], ['hands', 'Hands'], ['status', 'Status'],
+                  ['emoji', 'Emoji'], ['recent', 'Recent'], ['favorites', 'Saved'],
+                ] as const).map(([category, label]) => (
+                  <button
+                    key={category}
+                    type="button"
+                    onClick={() => setSymbolCategory(category)}
+                    className={`shrink-0 rounded-full px-2 py-1 text-[10px] ${symbolCategory === category ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-300'}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="grid max-h-52 w-full grid-cols-7 gap-1.5 overflow-y-auto p-0.5">
+                {filteredSymbols.map(item => (
+                  <div key={item.label} className="group/symbol relative">
+                    <button
+                      onClick={() => chooseSymbol(item.value)}
+                      title={item.label}
+                      aria-label={item.label}
+                      className={`flex h-9 w-9 items-center justify-center rounded-lg text-xl transition hover:bg-brand-50 dark:hover:bg-slate-600 ${settings.symbol === item.value ? 'bg-brand-100 ring-1 ring-brand-400 dark:bg-slate-600' : 'bg-white/60 dark:bg-slate-700/60'}`}
+                    >
+                      {item.value}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toggleFavoriteSymbol(item.value)}
+                      className={`absolute -right-0.5 -top-0.5 rounded-full bg-white p-0.5 shadow transition dark:bg-slate-700 ${favoriteSymbols.includes(item.value) ? 'text-amber-500 opacity-100' : 'text-slate-400 opacity-0 group-hover/symbol:opacity-100'}`}
+                      title={favoriteSymbols.includes(item.value) ? 'Remove from saved' : 'Save symbol'}
+                    >
+                      <Star size={9} fill={favoriteSymbols.includes(item.value) ? 'currentColor' : 'none'} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              {filteredSymbols.length === 0 && !canUseCustomSymbol && <p className="w-full py-4 text-center text-xs text-slate-400">No matching symbols.</p>}
+              {canUseCustomSymbol && !availableSymbols.some(item => item.value === customSymbol) && (
+                <button type="button" onClick={() => chooseSymbol(customSymbol)} className="w-full rounded-lg border border-dashed border-brand-300 px-3 py-2 text-xs text-brand-700 hover:bg-brand-50 dark:text-brand-300 dark:hover:bg-slate-700">
+                  Use custom symbol <span className="ml-2 text-lg">{customSymbol}</span>
+                </button>
+              )}
+            </div>
+          )}
+        </div>
 
       </div>
 
@@ -343,52 +541,54 @@ const Toolbar: React.FC<ToolbarProps> = ({
           </div>}
       </div>
 
-      {/* Size Picker (Liquid Glass Popover) */}
-      <div className="relative shrink-0">
+      {/* Each tool keeps its own remembered size. */}
+      {supportsSize && <div className="relative shrink-0">
           <button 
               onClick={() => togglePopover('size')}
               aria-expanded={openPopover === 'size'}
-              className="w-8 h-8 rounded-lg border border-slate-200 dark:border-slate-600 flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors text-slate-600 dark:text-slate-300"
-              title="Size / Stroke Width"
+              aria-label={`${sizeLabel}: ${currentSize}px`}
+              className="h-8 min-w-[3.5rem] rounded-lg border border-slate-200 px-2 dark:border-slate-600 flex items-center justify-center gap-1.5 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors text-slate-600 dark:text-slate-300"
+              title={`${sizeLabel}: ${currentSize}px · remembered for this tool`}
           >
-             {currentTool === 'text' ? (
-                 <Type size={16} />
-             ) : (
-                <div 
+             {isTextSize ? (
+                  <Type size={16} />
+              ) : (
+                 <div
                     className="rounded-full bg-slate-800 dark:bg-slate-200" 
                     style={{ 
-                        width: Math.max(4, Math.min(14, settings.strokeWidth)), 
-                        height: Math.max(4, Math.min(14, settings.strokeWidth)) 
-                    }} 
-                />
-             )}
+                        width: Math.max(4, Math.min(14, currentSize)),
+                        height: Math.max(4, Math.min(14, currentSize))
+                     }}
+                 />
+              )}
+              <span className="text-[10px] font-semibold tabular-nums">{currentSize}</span>
           </button>
 
           {openPopover === 'size' && <div className={glassPanelClass}>
               <div className="w-full text-xs text-center font-medium text-slate-500 dark:text-slate-300 mb-1">
-                  {currentTool === 'text' ? 'Font Size' : 'Stroke Width'}
+                  {sizeLabel} · saved for this tool
               </div>
-              
-              {currentTool === 'text' ? (
+
+              {isTextSize ? (
                    <div className="flex flex-col gap-1 w-full">
-                       {TEXT_SIZES.map(s => (
-                           <button
-                                key={s.value}
+                       {TEXT_SIZES.map(size => (
+                            <button
+                                key={size}
                                 onClick={() => {
-                                  setSettings({ ...settings, strokeWidth: s.value });
+                                  setSettings({ ...settings, fontSize: size });
                                   setOpenPopover(null);
                                 }}
                                 className={`px-2 py-1 text-xs rounded hover:bg-slate-200 dark:hover:bg-slate-600 text-left ${
-                                    settings.strokeWidth === s.value ? 'bg-brand-100 dark:bg-brand-900/30 text-brand-700 dark:text-brand-300 font-bold' : 'text-slate-700 dark:text-slate-200'
+                                    settings.fontSize === size ? 'bg-brand-100 dark:bg-brand-900/30 text-brand-700 dark:text-brand-300 font-bold' : 'text-slate-700 dark:text-slate-200'
                                 }`}
                            >
-                               {s.label}
+                               {size}px
                            </button>
                        ))}
                    </div>
               ) : (
                    <div className="flex items-center gap-2">
-                       {DOT_SIZES.map((size) => (
+                       {sizePresets.map((size) => (
                         <button
                             key={size}
                             onClick={() => {
@@ -410,30 +610,36 @@ const Toolbar: React.FC<ToolbarProps> = ({
                    </div>
               )}
           </div>}
-      </div>
+      </div>}
 
       {/* Contextual Inline Tools (Keep these accessible) */}
-      {(currentTool === 'arrow' || currentTool === 'stamp' || currentTool === 'pixelate' || currentTool === 'highlighter') && (
+      {(contextualTool === 'arrow' || contextualTool === 'stamp' || contextualTool === 'pixelate' || contextualTool === 'highlighter') && (
         <>
             <div className="w-px h-6 bg-slate-300 dark:bg-slate-600 mx-1 shrink-0"></div>
             
-            {currentTool === 'stamp' && (
+            {contextualTool === 'stamp' && (
                 <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-700 p-0.5 rounded-md">
                      <div className="flex bg-slate-200 dark:bg-slate-600 rounded p-0.5 gap-0.5">
-                        <button
-                            onClick={() => setSettings({ ...settings, stampStyle: 'circle' })}
-                            className={`p-1 rounded ${settings.stampStyle === 'circle' ? 'bg-white dark:bg-slate-500 shadow text-brand-600' : 'text-slate-500'}`}
-                            title="Circle Stamp"
-                        >
-                            <Circle size={14} />
-                        </button>
-                        <button
-                            onClick={() => setSettings({ ...settings, stampStyle: 'square' })}
-                            className={`p-1 rounded ${settings.stampStyle === 'square' ? 'bg-white dark:bg-slate-500 shadow text-brand-600' : 'text-slate-500'}`}
-                            title="Square Stamp"
-                        >
-                            <Square size={14} />
-                        </button>
+                        {stampStyles.map(option => (
+                          <button
+                              key={option.id}
+                              onClick={() => setSettings({ ...settings, stampStyle: option.id })}
+                              className={`flex h-6 w-6 items-center justify-center rounded transition ${settings.stampStyle === option.id ? 'bg-white dark:bg-slate-500 shadow text-brand-600' : 'text-slate-500 hover:bg-white/60 dark:hover:bg-slate-500/60'}`}
+                              title={option.label}
+                              aria-label={option.label}
+                          >
+                              {option.id === 'plain' ? (
+                                <span className="text-xs font-bold">1</span>
+                              ) : (
+                                <span className={`block border-2 border-current ${
+                                  option.id === 'circle' ? 'h-3.5 w-3.5 rounded-full' :
+                                  option.id === 'rounded' ? 'h-3.5 w-4 rounded-[5px]' :
+                                  option.id === 'diamond' ? 'h-3 w-3 rotate-45' :
+                                  'h-3.5 w-3.5'
+                                }`} />
+                              )}
+                          </button>
+                        ))}
                     </div>
 
                     <div className="flex items-center gap-1">
@@ -448,7 +654,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
                 </div>
             )}
 
-            {currentTool === 'pixelate' && (
+            {contextualTool === 'pixelate' && (
                 <div className="flex bg-slate-100 dark:bg-slate-700 p-0.5 rounded-md gap-0.5">
                     <button
                         onClick={() => setSettings({ ...settings, pixelateStyle: 'pixel' })}
@@ -475,7 +681,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
                 </div>
             )}
 
-            {currentTool === 'highlighter' && (
+            {contextualTool === 'highlighter' && (
                 <div className="flex bg-slate-100 dark:bg-slate-700 p-0.5 rounded-md gap-0.5">
                     <button
                         onClick={() => setSettings({ ...settings, highlighterStyle: 'brush' })}
@@ -502,7 +708,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
                 </div>
             )}
 
-            {currentTool === 'arrow' && (
+            {contextualTool === 'arrow' && (
                 <div className="flex bg-slate-100 dark:bg-slate-700 p-0.5 rounded-md gap-0.5">
                     <button
                         onClick={() => setSettings({ ...settings, arrowStyle: 'filled' })}
@@ -566,6 +772,29 @@ const Toolbar: React.FC<ToolbarProps> = ({
       </div>
 
       <div className="hidden lg:block flex-grow"></div>
+
+      {selectionCount > 1 && (
+        <div className="flex items-center gap-0.5 rounded bg-brand-50 p-0.5 text-[10px] text-brand-700 dark:bg-slate-700 dark:text-brand-300" title="Align selected objects · Shift-click to change the selection">
+          <span className="px-1 font-semibold">{selectionCount} selected</span>
+          {[
+            ['left', 'L', 'Align left'],
+            ['centerX', 'C', 'Align horizontal centers'],
+            ['right', 'R', 'Align right'],
+            ['top', 'T', 'Align top'],
+            ['centerY', 'M', 'Align vertical centers'],
+            ['bottom', 'B', 'Align bottom'],
+          ].map(([action, label, title]) => (
+            <button
+              key={action}
+              onClick={() => onAlign(action as 'left' | 'centerX' | 'right' | 'top' | 'centerY' | 'bottom')}
+              className="h-6 min-w-6 rounded bg-white px-1 font-bold shadow-sm hover:bg-brand-100 dark:bg-slate-600 dark:hover:bg-slate-500"
+              title={title}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Layer Actions */}
       {hasSelection && (
