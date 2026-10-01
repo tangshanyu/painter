@@ -1,6 +1,8 @@
 import React from 'react';
 import { DrawingElement, ArrowStyle, StampStyle } from '../types';
 import { HIGHLIGHTER_OPACITY } from '../constants';
+import { getElementSize, getStampDiameter } from './toolSettings';
+import { getCalloutTailGeometry, getCalloutWorldTip, isPointInCalloutTail } from './callout';
 
 // Helper to load images for the canvas renderer
 const imageCache: Record<string, HTMLImageElement> = {};
@@ -147,7 +149,6 @@ const drawArrow = (ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
     }
 };
 
-const getStampDiameter = (element: DrawingElement) => element.stampSize ?? (10 + element.strokeWidth) * 2;
 const getStampRadius = (element: DrawingElement) => Math.max(8, getStampDiameter(element) / 2);
 
 const drawStamp = (ctx: CanvasRenderingContext2D, x: number, y: number, text: string, color: string, stampSize: number, style: StampStyle = 'circle') => {
@@ -241,7 +242,7 @@ const applyPixelate = (ctx: CanvasRenderingContext2D, width: number, height: num
         const sw = imageData.width;
         const sh = imageData.height;
         
-        const size = Math.floor(pixelSize * window.devicePixelRatio); 
+        const size = Math.max(1, Math.round(pixelSize * Math.max(Math.abs(transform.a), Math.abs(transform.d))));
 
         for (let y = 0; y < sh; y += size) {
             for (let x = 0; x < sw; x += size) {
@@ -316,7 +317,7 @@ const applyBlur = (ctx: CanvasRenderingContext2D, width: number, height: number,
         // Draw back with blur
         ctx.save();
         ctx.setTransform(1, 0, 0, 1, 0, 0); // Reset transform to draw in absolute coords
-        ctx.filter = `blur(${blurAmount}px)`;
+        ctx.filter = `blur(${blurAmount * Math.max(Math.abs(transform.a), Math.abs(transform.d))}px)`;
         ctx.drawImage(offCanvas, rx, ry);
         ctx.filter = 'none';
         ctx.restore();
@@ -482,7 +483,7 @@ const drawSelectionBorder = (ctx: CanvasRenderingContext2D, el: DrawingElement) 
       const radius = getStampRadius(el);
       x = (el.x || 0) - radius; y = (el.y || 0) - radius; w = radius * 2; h = radius * 2;
   } else if (el.type === 'symbol') {
-      const size = Math.max(16, el.strokeWidth);
+      const size = getElementSize(el);
       x = (el.x || 0) - size / 2; y = (el.y || 0) - size / 2; w = size; h = size;
   }
 
@@ -493,6 +494,15 @@ const drawSelectionBorder = (ctx: CanvasRenderingContext2D, el: DrawingElement) 
 
   // Draw border
   ctx.strokeRect(drawX - padding, drawY - padding, drawW + padding * 2, drawH + padding * 2);
+
+  if (el.type === 'callout' && el.calloutTip && !el.locked) {
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc((el.x ?? 0) + el.calloutTip.x, (el.y ?? 0) + el.calloutTip.y, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
   
   if (!el.locked && ['rect', 'image', 'text', 'callout', 'spotlight', 'arrow', 'pixelate', 'circle', 'triangle', 'diamond', 'line', 'highlighter'].includes(el.type)) {
       if (el.type === 'highlighter' && (!el.highlighterStyle || el.highlighterStyle === 'brush')) {
@@ -593,7 +603,7 @@ const drawElement = (ctx: CanvasRenderingContext2D, el: DrawingElement, canvasWi
 
   if (el.type === 'symbol') {
       if (el.x !== undefined && el.y !== undefined) {
-          const size = Math.max(16, el.strokeWidth);
+          const size = getElementSize(el);
           ctx.font = `${size}px "Segoe UI Emoji", "Apple Color Emoji", sans-serif`;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
@@ -662,7 +672,7 @@ const drawElement = (ctx: CanvasRenderingContext2D, el: DrawingElement, canvasWi
 
   if (isHighlighter) {
     ctx.globalAlpha *= HIGHLIGHTER_OPACITY;
-    ctx.lineWidth = el.strokeWidth * 3; 
+    ctx.lineWidth = getElementSize(el);
   }
 
   const x = el.x || 0;
@@ -710,14 +720,14 @@ const drawElement = (ctx: CanvasRenderingContext2D, el: DrawingElement, canvasWi
   } else if (el.type === 'arrow') {
       drawArrow(ctx, x, y, w, h, el.strokeWidth, el.arrowStyle || 'filled');
   } else if (el.type === 'text' || el.type === 'callout') {
-     if (el.x !== undefined && el.y !== undefined && el.text) {
-       const fontSize = el.fontSize ?? el.strokeWidth * 6;
+     if (el.x !== undefined && el.y !== undefined && (el.text || el.type === 'callout')) {
+       const fontSize = getElementSize(el);
        const boxX = (el.width || 0) < 0 ? el.x + (el.width || 0) : el.x;
        const boxY = (el.height || 0) < 0 ? el.y + (el.height || 0) : el.y;
        const boxWidth = Math.max(20, Math.abs(el.width || 0));
        const boxHeight = Math.max(fontSize * 1.2, Math.abs(el.height || 0));
        const padding = el.type === 'callout' ? Math.max(10, fontSize * 0.45) : 0;
-       const tailHeight = el.type === 'callout' ? Math.min(16, boxHeight * 0.2) : 0;
+       const tailHeight = el.type === 'callout' && !el.calloutTip ? Math.min(16, boxHeight * 0.2) : 0;
        const tailAtTop = el.calloutTail === 'top-left' || el.calloutTail === 'top-right';
        const contentY = boxY + (tailAtTop ? tailHeight : 0);
        const contentHeight = Math.max(fontSize * 1.2, boxHeight - tailHeight);
@@ -730,6 +740,22 @@ const drawElement = (ctx: CanvasRenderingContext2D, el: DrawingElement, canvasWi
          ctx.strokeStyle = el.color;
          ctx.lineWidth = Math.max(2, el.strokeWidth);
          ctx.stroke();
+         const customTail = getCalloutTailGeometry(el);
+         if (customTail) {
+           ctx.beginPath();
+           ctx.moveTo(customTail.base1.x, customTail.base1.y);
+           ctx.lineTo(customTail.tip.x, customTail.tip.y);
+           ctx.lineTo(customTail.base2.x, customTail.base2.y);
+           ctx.closePath();
+           ctx.fillStyle = '#ffffff';
+           ctx.fill();
+           // Do not draw a line across the attachment: the body and tail form one bubble.
+           ctx.beginPath();
+           ctx.moveTo(customTail.base1.x, customTail.base1.y);
+           ctx.lineTo(customTail.tip.x, customTail.tip.y);
+           ctx.lineTo(customTail.base2.x, customTail.base2.y);
+           ctx.stroke();
+         } else if (!el.calloutTip) {
          const tailOnLeft = el.calloutTail === 'bottom-left' || el.calloutTail === 'top-left';
          const tailX = boxX + Math.min(boxWidth - 18, Math.max(18, boxWidth * (tailOnLeft ? 0.3 : 0.7)));
          const tailBaseY = tailAtTop ? contentY + 1 : contentY + contentHeight - 1;
@@ -744,6 +770,7 @@ const drawElement = (ctx: CanvasRenderingContext2D, el: DrawingElement, canvasWi
          ctx.strokeStyle = el.color;
          ctx.lineWidth = Math.max(2, el.strokeWidth);
          ctx.stroke();
+         }
          ctx.fillStyle = el.color;
        }
        ctx.font = `${fontSize}px sans-serif`; 
@@ -752,7 +779,7 @@ const drawElement = (ctx: CanvasRenderingContext2D, el: DrawingElement, canvasWi
        ctx.rect(boxX + padding, contentY + padding, Math.max(20, boxWidth - padding * 2), Math.max(fontSize * 1.2, contentHeight - padding * 2));
        ctx.clip();
        const lineHeight = fontSize * (el.lineHeight ?? 1.2);
-       drawWrappedText(ctx, el.text, boxX + padding, contentY + padding, Math.max(20, boxWidth - padding * 2), Math.max(fontSize * 1.2, contentHeight - padding * 2), lineHeight, el.textAlign ?? 'left');
+       drawWrappedText(ctx, el.text ?? '', boxX + padding, contentY + padding, Math.max(20, boxWidth - padding * 2), Math.max(fontSize * 1.2, contentHeight - padding * 2), lineHeight, el.textAlign ?? 'left');
      }
   } else if (el.type === 'image' && el.imageData) {
      const img = getImage(el.imageData);
@@ -814,7 +841,8 @@ export const isPointInElement = (x: number, y: number, el: DrawingElement, ctx: 
 
     if (el.type === 'rect' || el.type === 'image' || el.type === 'text' || el.type === 'callout' || el.type === 'spotlight' || el.type === 'arrow' || el.type === 'pixelate') {
         const padding = 5;
-        return x >= bx - padding && x <= bx + bw + padding && y >= by - padding && y <= by + bh + padding;
+        return (x >= bx - padding && x <= bx + bw + padding && y >= by - padding && y <= by + bh + padding)
+          || (el.type === 'callout' && isPointInCalloutTail({ x, y }, el));
     }
     else if (el.type === 'highlighter' && el.highlighterStyle === 'rect') {
         const padding = 5;
@@ -939,7 +967,7 @@ export const getElementBounds = (el: DrawingElement) => {
     }
 
     if (el.type === 'symbol') {
-        const size = Math.max(16, el.strokeWidth);
+        const size = getElementSize(el);
         return { x: bx - size / 2, y: by - size / 2, w: size, h: size };
     }
 
@@ -950,10 +978,12 @@ export const getElementBounds = (el: DrawingElement) => {
 };
 
 // Check which resize handle is hit
-export type ResizeHandleType = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'rotate' | null;
+export type ResizeHandleType = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'rotate' | 'callout-tip' | null;
 
 export const getResizeHandleType = (x: number, y: number, el: DrawingElement): ResizeHandleType => {
     if (el.locked) return null;
+    const tip = el.type === 'callout' ? getCalloutWorldTip(el) : undefined;
+    if (tip && Math.hypot(x - tip.x, y - tip.y) <= 8) return 'callout-tip';
     // Highlight Brush has no handles
     if (el.type === 'highlighter' && (!el.highlighterStyle || el.highlighterStyle === 'brush')) return null;
 
@@ -1017,6 +1047,7 @@ export const getCursorForHandle = (handle: ResizeHandleType) => {
         case 'nw': case 'se': return 'nwse-resize';
         case 'ne': case 'sw': return 'nesw-resize';
         case 'rotate': return 'alias'; 
+        case 'callout-tip': return 'crosshair';
         default: return 'default';
     }
 }

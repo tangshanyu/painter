@@ -13,6 +13,8 @@ import {
 } from '../utils/draw';
 import { createDocumentSnapshot } from '../utils/history';
 import { resizeCanvasDocument } from '../utils/canvasResize';
+import { getElementSize, getStampDiameter, getToolSize, normalizeToolSize } from '../utils/toolSettings';
+import { createCalloutDraft, getCalloutWorldTip, withCalloutWorldTip } from '../utils/callout';
 
 interface EditorProps {
   tab: TabData;
@@ -154,6 +156,8 @@ const Editor: React.FC<EditorProps> = ({
   } | null>(null);
   const gestureStartElementsRef = useRef<DrawingElement[] | null>(null);
   const skipTextBlurCommitRef = useRef(false);
+  const lastCommittedTextInputRef = useRef<object | null>(null);
+  const calloutDraftRef = useRef<DrawingElement | null>(null);
   const [cursor, setCursor] = useState('default');
   
   const [currentElement, setCurrentElement] = useState<DrawingElement | null>(null);
@@ -162,6 +166,7 @@ const Editor: React.FC<EditorProps> = ({
   const [textInput, setTextInput] = useState<{
     id?: string;
     originalElement?: DrawingElement;
+    calloutTip?: Point;
     elementType: 'text' | 'callout';
     x: number;
     y: number;
@@ -197,7 +202,14 @@ const Editor: React.FC<EditorProps> = ({
     const dpr = window.devicePixelRatio || 1;
     canvas.width = tab.canvasWidth * dpr;
     canvas.height = tab.canvasHeight * dpr;
-    renderCanvas(canvas, ctx, bgImage, tab.elements, currentElement, selectedElementIds, tab.scale, dpr);
+    const preview = textInput?.visible && textInput.elementType === 'callout' ? {
+      ...textInput.originalElement, id: 'editing-callout', type: 'callout' as const,
+      x: textInput.x, y: textInput.y, width: textInput.width, height: textInput.height,
+      text: textInput.text, color: textInput.color, opacity: textInput.opacity,
+      fontSize: textInput.fontSize, strokeWidth: Math.min(4, Math.max(2, textInput.fontSize / 8)),
+      calloutTip: textInput.calloutTip ?? textInput.originalElement?.calloutTip,
+    } : currentElement;
+    renderCanvas(canvas, ctx, bgImage, tab.elements, preview, selectedElementIds, tab.scale, dpr);
 
     ctx.save();
     ctx.setLineDash([5, 4]);
@@ -227,10 +239,12 @@ const Editor: React.FC<EditorProps> = ({
       ctx.strokeRect(x, y, width, height);
     }
     ctx.restore();
-  }, [tab.elements, tab.canvasWidth, tab.canvasHeight, bgImage, currentElement, selectedElementIds, tab.scale, marquee, snapGuides]);
+  }, [tab.elements, tab.canvasWidth, tab.canvasHeight, bgImage, currentElement, textInput, selectedElementIds, tab.scale, marquee, snapGuides]);
 
   const commitText = useCallback(() => {
     if (!textInput || !textInput.visible) return;
+    if (lastCommittedTextInputRef.current === textInput) return;
+    lastCommittedTextInputRef.current = textInput;
     skipTextBlurCommitRef.current = false;
     setTextInput(null);
     let newElements = textInput.id ? tab.elements.filter(el => el.id !== textInput.id) : [...tab.elements];
@@ -246,6 +260,7 @@ const Editor: React.FC<EditorProps> = ({
             ? Math.min(4, Math.max(2, textInput.fontSize / 8))
             : Math.max(1, textInput.fontSize / 6),
           fontSize: textInput.fontSize,
+          calloutTip: textInput.calloutTip ?? textInput.originalElement?.calloutTip,
           x: textInput.x,
           y: textInput.y,
           width: textInput.width,
@@ -285,7 +300,7 @@ const Editor: React.FC<EditorProps> = ({
                 height: el.height || 0,
                 text: el.text || '',
                 color: el.color,
-                fontSize: el.fontSize ?? el.strokeWidth * 6,
+                fontSize: getElementSize(el),
                 opacity: el.opacity ?? 1,
                 visible: true
             });
@@ -316,7 +331,8 @@ const Editor: React.FC<EditorProps> = ({
       setCursor('grabbing');
     };
 
-    if (!e.shiftKey && selectedElementIds.length === 1 && selectedElementId) {
+    const canManipulateSelection = activeTool === 'select' || e.ctrlKey || e.metaKey || activeTool === 'text' || activeTool === 'callout';
+    if (canManipulateSelection && !e.shiftKey && selectedElementIds.length === 1 && selectedElementId) {
         const selectedEl = tab.elements.find(el => el.id === selectedElementId);
         if (selectedEl && !selectedEl.locked) {
             const handle = getResizeHandleType(pos.x, pos.y, selectedEl);
@@ -336,7 +352,7 @@ const Editor: React.FC<EditorProps> = ({
         }
     }
 
-    if (!e.shiftKey && selectedElementIds.length > 1) {
+    if (canManipulateSelection && !e.shiftKey && selectedElementIds.length > 1) {
         const groupElements = tab.elements.filter(element => selectedElementIds.includes(element.id) && !element.hidden);
         const groupBounds = getGroupBounds(groupElements);
         if (groupBounds && groupElements.every(element => !element.locked)) {
@@ -407,8 +423,7 @@ const Editor: React.FC<EditorProps> = ({
     setDragStartPos(pos); 
 
     if (activeTool === 'stamp') {
-        const storedStampSize = toolSettings.toolSizes.stamp ?? 32;
-        const stampSize = storedStampSize < 20 ? (10 + storedStampSize) * 2 : storedStampSize;
+        const stampSize = getToolSize('stamp', toolSettings);
         const newElement: DrawingElement = {
             id: Date.now().toString(),
             type: 'stamp',
@@ -434,7 +449,7 @@ const Editor: React.FC<EditorProps> = ({
     }
 
     if (activeTool === 'symbol') {
-        const symbolSize = toolSettings.toolSizes.symbol ?? 48;
+        const symbolSize = getToolSize('symbol', toolSettings);
         const newElement: DrawingElement = {
             id: Date.now().toString(),
             type: 'symbol',
@@ -454,7 +469,14 @@ const Editor: React.FC<EditorProps> = ({
         return;
     }
 
-    if (activeTool === 'text' || activeTool === 'callout') {
+    if (activeTool === 'callout') {
+        const draft = createCalloutDraft(pos, pos, toolSettings, tab.canvasWidth, tab.canvasHeight);
+        calloutDraftRef.current = draft;
+        setCurrentElement(draft);
+        return;
+    }
+
+    if (activeTool === 'text') {
         setCurrentElement({
             id: `temp-${activeTool}`,
             type: activeTool,
@@ -464,9 +486,7 @@ const Editor: React.FC<EditorProps> = ({
             height: 0,
             color: toolSettings.color,
             opacity: toolSettings.opacity,
-            strokeWidth: activeTool === 'callout'
-              ? Math.min(4, Math.max(2, toolSettings.fontSize / 8))
-              : Math.max(1, toolSettings.fontSize / 6),
+            strokeWidth: Math.max(1, toolSettings.fontSize / 6),
             fontSize: toolSettings.fontSize,
         });
         return;
@@ -485,6 +505,7 @@ const Editor: React.FC<EditorProps> = ({
       // Attributes for shapes
       pixelateStyle: activeTool === 'pixelate' ? toolSettings.pixelateStyle : undefined,
       highlighterStyle: activeTool === 'highlighter' ? toolSettings.highlighterStyle : undefined,
+      highlighterWidth: activeTool === 'highlighter' ? toolSettings.strokeWidth : undefined,
       arrowStyle: activeTool === 'arrow' ? toolSettings.arrowStyle : undefined,
       
       points: isFreehand ? [pos] : undefined,
@@ -592,12 +613,13 @@ const Editor: React.FC<EditorProps> = ({
                 updated.y = top + ((updated.y || 0) - bounds.y) * scaleY;
                 if (updated.width !== undefined) updated.width *= scaleX;
                 if (updated.height !== undefined) updated.height *= scaleY;
+                if (updated.calloutTip) updated.calloutTip = { x: updated.calloutTip.x * scaleX, y: updated.calloutTip.y * scaleY };
                 if (updated.type === 'stamp') {
-                    const diameter = (updated.stampSize ?? (10 + updated.strokeWidth) * 2) * averageScale;
-                    updated.stampSize = Math.max(8, diameter);
+                    const diameter = getStampDiameter(updated) * averageScale;
+                    updated.stampSize = normalizeToolSize('stamp', diameter);
                     updated.strokeWidth = updated.stampSize;
                 }
-                if (updated.type === 'symbol') updated.strokeWidth = Math.max(8, updated.strokeWidth * averageScale);
+                if (updated.type === 'symbol') updated.strokeWidth = normalizeToolSize('symbol', getElementSize(updated) * averageScale);
                 return updated;
             });
         }
@@ -609,7 +631,8 @@ const Editor: React.FC<EditorProps> = ({
     }
 
     if (!isDrawing && !isDragging && !elementResizeState) {
-        if (selectedElementIds.length === 1 && selectedElementId) {
+        const canManipulateSelection = activeTool === 'select' || e.ctrlKey || e.metaKey || activeTool === 'text' || activeTool === 'callout';
+        if (canManipulateSelection && selectedElementIds.length === 1 && selectedElementId) {
             const selectedEl = tab.elements.find(el => el.id === selectedElementId);
             if (selectedEl && !selectedEl.locked) {
                 const handle = getResizeHandleType(pos.x, pos.y, selectedEl);
@@ -623,7 +646,7 @@ const Editor: React.FC<EditorProps> = ({
             } else {
                 setCursor(activeTool === 'select' ? 'default' : 'crosshair');
             }
-        } else if (selectedElementIds.length > 1) {
+        } else if (canManipulateSelection && selectedElementIds.length > 1) {
             const groupElements = tab.elements.filter(element => selectedElementIds.includes(element.id) && !element.hidden);
             const groupBounds = getGroupBounds(groupElements);
             const groupHandle = groupBounds && groupElements.every(element => !element.locked)
@@ -647,6 +670,10 @@ const Editor: React.FC<EditorProps> = ({
         const { handle, startPos, originalEl } = elementResizeState;
         const dx = pos.x - startPos.x;
         const dy = pos.y - startPos.y;
+        if (handle === 'callout-tip') {
+            updateTab(tab.id, { elements: tab.elements.map(element => element.id === originalEl.id ? withCalloutWorldTip(originalEl, pos) : element) });
+            return;
+        }
         
         // ROTATION LOGIC
         if (handle === 'rotate') {
@@ -704,7 +731,9 @@ const Editor: React.FC<EditorProps> = ({
                 newEl.height = oh - dy;
             }
         }
-        const updatedElements = tab.elements.map(el => el.id === originalEl.id ? newEl : el);
+        const originalTip = getCalloutWorldTip(originalEl);
+        const resizedElement = originalTip ? withCalloutWorldTip(newEl, originalTip) : newEl;
+        const updatedElements = tab.elements.map(el => el.id === originalEl.id ? resizedElement : el);
         updateTab(tab.id, { elements: updatedElements });
         return;
     }
@@ -782,6 +811,13 @@ const Editor: React.FC<EditorProps> = ({
 
     if (!isDrawing || !currentElement || !dragStartPos) return;
 
+    if (calloutDraftRef.current) {
+      const draft = withCalloutWorldTip(calloutDraftRef.current, pos);
+      calloutDraftRef.current = draft;
+      setCurrentElement(draft);
+      return;
+    }
+
     if (activeTool === 'pen' || (activeTool === 'highlighter' && toolSettings.highlighterStyle === 'brush')) {
       let nextPoint = pos;
       if (activeTool === 'highlighter' && e.shiftKey) {
@@ -825,7 +861,20 @@ const Editor: React.FC<EditorProps> = ({
     }
   };
 
-  const handleMouseUp = async () => {
+  const handleMouseUp = async (event?: React.MouseEvent | MouseEvent) => {
+    const calloutDraft = calloutDraftRef.current;
+    if (calloutDraft) {
+      calloutDraftRef.current = null;
+      const draft = event && canvasRef.current ? withCalloutWorldTip(calloutDraft, getMousePos(canvasRef.current, event)) : calloutDraft;
+      setIsDrawing(false);
+      setDragStartPos(null);
+      setCurrentElement(null);
+      setTextInput({ elementType: 'callout', x: draft.x!, y: draft.y!, width: draft.width!, height: draft.height!,
+        text: '', color: draft.color, fontSize: draft.fontSize!, opacity: draft.opacity ?? 1, calloutTip: draft.calloutTip, visible: true });
+      return;
+    }
+    // React's viewport mouseup and the window listener can see the same release.
+    if (currentElement?.type === 'callout' && currentElement.calloutTip) return;
     const commitGestureHistory = () => {
       const originalElements = gestureStartElementsRef.current;
       gestureStartElementsRef.current = null;
@@ -1053,6 +1102,21 @@ const Editor: React.FC<EditorProps> = ({
   const previewTranslateX = canvasResizeState?.handle.includes('e')
     ? previewWidthDelta / 2
     : canvasResizeState?.handle.includes('w') ? -previewWidthDelta / 2 : 0;
+
+  useEffect(() => {
+    if (!isDrawing || activeTool !== 'callout') return;
+    const release = (event: MouseEvent) => { if (calloutDraftRef.current) void handleMouseUp(event); };
+    window.addEventListener('mouseup', release);
+    return () => window.removeEventListener('mouseup', release);
+  }, [isDrawing, activeTool, handleMouseUp]);
+
+  useEffect(() => {
+    if (activeTool !== 'callout' && calloutDraftRef.current) {
+      calloutDraftRef.current = null;
+      setCurrentElement(null);
+      setIsDrawing(false);
+    }
+  }, [activeTool]);
   const previewTranslateY = canvasResizeState?.handle.includes('s')
     ? previewHeightDelta / 2
     : canvasResizeState?.handle.includes('n') ? -previewHeightDelta / 2 : 0;
@@ -1095,14 +1159,14 @@ const Editor: React.FC<EditorProps> = ({
       onMouseDown={handleViewportMouseDown}
       onMouseMove={(e) => {
           if (panState) handleViewportMouseMove(e);
-          if (canvasResizeState) handleMouseMove(e);
+          if (canvasResizeState || (isDrawing && activeTool === 'callout' && e.target !== canvasRef.current)) handleMouseMove(e);
       }}
-      onMouseUp={() => {
+      onMouseUp={(event) => {
           if (panState) {
             setPanState(null);
             return;
           }
-          void handleMouseUp();
+          void handleMouseUp(event);
       }}
       onMouseLeave={() => setPanState(null)}
       onDragOver={(e) => {
@@ -1130,8 +1194,8 @@ const Editor: React.FC<EditorProps> = ({
           ref={canvasRef}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
-          onMouseLeave={() => {
-            if (!canvasResizeState && activeTool !== 'hand') void handleMouseUp();
+          onMouseLeave={(event) => {
+            if (!canvasResizeState && activeTool !== 'hand' && !calloutDraftRef.current) void handleMouseUp(event);
           }}
           onDoubleClick={handleDoubleClick}
           style={{ 
@@ -1147,25 +1211,25 @@ const Editor: React.FC<EditorProps> = ({
 
         {canvasResizeState && (
           <div className="pointer-events-none absolute right-2 top-2 z-30 rounded-md bg-slate-900/80 px-2 py-1 text-xs font-medium text-white shadow">
-            {previewWidth} × {previewHeight}px{canvasResizeState.offsetX || canvasResizeState.offsetY ? ' · content shifted' : ''}
+            {previewWidth} × {previewHeight}px{canvasResizeState.offsetX || canvasResizeState.offsetY ? ' · 內容已移動' : ''}
           </div>
         )}
 
         {!tab.imageDataUrl && tab.elements.length === 0 && !currentElement && activeTool === 'select' && (
           <div className="absolute inset-0 z-10 flex items-center justify-center p-6 pointer-events-none">
-            <div className="pointer-events-auto w-full max-w-md rounded-2xl border-2 border-dashed border-brand-200 bg-white/90 px-6 py-7 text-center shadow-sm backdrop-blur dark:border-slate-600 dark:bg-slate-800/90">
+            <div className="empty-state pointer-events-auto w-full max-w-md rounded-2xl border-2 border-dashed border-brand-200 bg-white/90 px-6 py-7 text-center shadow-sm backdrop-blur dark:border-slate-600 dark:bg-slate-800/90">
               <ImagePlus className="mx-auto mb-3 text-brand-500" size={34} />
-              <h2 className="text-base font-semibold text-slate-800 dark:text-slate-100">Start with an image</h2>
-              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Drop an image here, paste from the clipboard, or open a file.</p>
+              <h2 className="text-base font-semibold text-slate-800 dark:text-slate-100">從一張圖片開始</h2>
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">拖入圖片、貼上剪貼簿內容，或開啟本機圖片。</p>
               <div className="mt-4 flex flex-wrap justify-center gap-2">
                 <button type="button" onClick={onOpenFile} className="inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-700">
-                  <FolderOpen size={16} /> Open image
+                  <FolderOpen size={16} /> 開啟圖片
                 </button>
                 <button type="button" onClick={() => void onPasteImage()} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100">
-                  <ClipboardPaste size={16} /> Paste
+                  <ClipboardPaste size={16} /> 貼上
                 </button>
                 <button type="button" onClick={onScreenCapture} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100">
-                  <MonitorUp size={16} /> Capture
+                  <MonitorUp size={16} /> 擷取
                 </button>
               </div>
             </div>
@@ -1174,21 +1238,21 @@ const Editor: React.FC<EditorProps> = ({
         
         {activeTool === 'select' && selectedElementIds.length === 0 && (
           <>
-            <button type="button" aria-label="Resize canvas from top left" className="absolute top-0 left-0 w-3 h-3 -translate-x-1/2 -translate-y-1/2 bg-white border border-slate-400 cursor-nwse-resize z-20 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:scale-125 transition-all"
+            <button type="button" aria-label="從左上角調整畫布大小" className="absolute top-0 left-0 w-3 h-3 -translate-x-1/2 -translate-y-1/2 bg-white border border-slate-400 cursor-nwse-resize z-20 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:scale-125 transition-all"
                  onMouseDown={(e) => handleCanvasResizeStart(e, 'nw')}></button>
-            <button type="button" aria-label="Resize canvas from top right" className="absolute top-0 right-0 w-3 h-3 translate-x-1/2 -translate-y-1/2 bg-white border border-slate-400 cursor-nesw-resize z-20 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:scale-125 transition-all"
+            <button type="button" aria-label="從右上角調整畫布大小" className="absolute top-0 right-0 w-3 h-3 translate-x-1/2 -translate-y-1/2 bg-white border border-slate-400 cursor-nesw-resize z-20 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:scale-125 transition-all"
                  onMouseDown={(e) => handleCanvasResizeStart(e, 'ne')}></button>
-            <button type="button" aria-label="Resize canvas from bottom left" className="absolute bottom-0 left-0 w-3 h-3 -translate-x-1/2 translate-y-1/2 bg-white border border-slate-400 cursor-nesw-resize z-20 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:scale-125 transition-all"
+            <button type="button" aria-label="從左下角調整畫布大小" className="absolute bottom-0 left-0 w-3 h-3 -translate-x-1/2 translate-y-1/2 bg-white border border-slate-400 cursor-nesw-resize z-20 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:scale-125 transition-all"
                  onMouseDown={(e) => handleCanvasResizeStart(e, 'sw')}></button>
-            <button type="button" aria-label="Resize canvas from bottom right" className="absolute bottom-0 right-0 w-3 h-3 translate-x-1/2 translate-y-1/2 bg-white border border-slate-400 cursor-nwse-resize z-20 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:scale-125 transition-all"
+            <button type="button" aria-label="從右下角調整畫布大小" className="absolute bottom-0 right-0 w-3 h-3 translate-x-1/2 translate-y-1/2 bg-white border border-slate-400 cursor-nwse-resize z-20 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:scale-125 transition-all"
                  onMouseDown={(e) => handleCanvasResizeStart(e, 'se')}></button>
-            <button type="button" aria-label="Resize canvas from top" className="absolute top-0 left-1/2 w-3 h-3 -translate-x-1/2 -translate-y-1/2 bg-white border border-slate-400 cursor-ns-resize z-20 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:scale-125 transition-all"
+            <button type="button" aria-label="從上方調整畫布大小" className="absolute top-0 left-1/2 w-3 h-3 -translate-x-1/2 -translate-y-1/2 bg-white border border-slate-400 cursor-ns-resize z-20 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:scale-125 transition-all"
                  onMouseDown={(e) => handleCanvasResizeStart(e, 'n')}></button>
-            <button type="button" aria-label="Resize canvas from bottom" className="absolute bottom-0 left-1/2 w-3 h-3 -translate-x-1/2 translate-y-1/2 bg-white border border-slate-400 cursor-ns-resize z-20 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:scale-125 transition-all"
+            <button type="button" aria-label="從下方調整畫布大小" className="absolute bottom-0 left-1/2 w-3 h-3 -translate-x-1/2 translate-y-1/2 bg-white border border-slate-400 cursor-ns-resize z-20 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:scale-125 transition-all"
                  onMouseDown={(e) => handleCanvasResizeStart(e, 's')}></button>
-            <button type="button" aria-label="Resize canvas from left" className="absolute top-1/2 left-0 w-3 h-3 -translate-x-1/2 -translate-y-1/2 bg-white border border-slate-400 cursor-ew-resize z-20 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:scale-125 transition-all"
+            <button type="button" aria-label="從左側調整畫布大小" className="absolute top-1/2 left-0 w-3 h-3 -translate-x-1/2 -translate-y-1/2 bg-white border border-slate-400 cursor-ew-resize z-20 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:scale-125 transition-all"
                  onMouseDown={(e) => handleCanvasResizeStart(e, 'w')}></button>
-            <button type="button" aria-label="Resize canvas from right" className="absolute top-1/2 right-0 w-3 h-3 translate-x-1/2 -translate-y-1/2 bg-white border border-slate-400 cursor-ew-resize z-20 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:scale-125 transition-all"
+            <button type="button" aria-label="從右側調整畫布大小" className="absolute top-1/2 right-0 w-3 h-3 translate-x-1/2 -translate-y-1/2 bg-white border border-slate-400 cursor-ew-resize z-20 opacity-0 group-hover:opacity-100 focus:opacity-100 hover:scale-125 transition-all"
                  onMouseDown={(e) => handleCanvasResizeStart(e, 'e')}></button>
           </>
         )}
@@ -1197,8 +1261,8 @@ const Editor: React.FC<EditorProps> = ({
           <>
             <button
               type="button"
-              aria-label="Add 200px blank space to top"
-              title="Add 200px above"
+              aria-label="上方增加 200 像素留白"
+              title="上方增加 200 像素"
               disabled={addingSpaceEdge !== null}
               className={quickAddButtonClass}
               style={{ left: '70%', top: 0, transform: 'translate(-50%, -50%)' }}
@@ -1209,8 +1273,8 @@ const Editor: React.FC<EditorProps> = ({
             </button>
             <button
               type="button"
-              aria-label="Add 200px blank space to bottom"
-              title="Add 200px below"
+              aria-label="下方增加 200 像素留白"
+              title="下方增加 200 像素"
               disabled={addingSpaceEdge !== null}
               className={quickAddButtonClass}
               style={{ left: '70%', bottom: 0, transform: 'translate(-50%, 50%)' }}
@@ -1221,8 +1285,8 @@ const Editor: React.FC<EditorProps> = ({
             </button>
             <button
               type="button"
-              aria-label="Add 200px blank space to left"
-              title="Add 200px to the left"
+              aria-label="左側增加 200 像素留白"
+              title="左側增加 200 像素"
               disabled={addingSpaceEdge !== null}
               className={quickAddButtonClass}
               style={{ left: 0, top: '70%', transform: 'translate(-50%, -50%)' }}
@@ -1233,8 +1297,8 @@ const Editor: React.FC<EditorProps> = ({
             </button>
             <button
               type="button"
-              aria-label="Add 200px blank space to right"
-              title="Add 200px to the right"
+              aria-label="右側增加 200 像素留白"
+              title="右側增加 200 像素"
               disabled={addingSpaceEdge !== null}
               className={quickAddButtonClass}
               style={{ right: 0, top: '70%', transform: 'translate(50%, -50%)' }}
@@ -1249,6 +1313,7 @@ const Editor: React.FC<EditorProps> = ({
         {textInput && textInput.visible && (
           <textarea
             autoFocus
+            aria-label={textInput.elementType === 'callout' ? '對話框文字' : '文字內容'}
             value={textInput.text}
             onChange={(e) => {
               const measuredHeight = Math.ceil(e.currentTarget.scrollHeight / Math.max(tab.scale, 0.1));
@@ -1296,7 +1361,7 @@ const Editor: React.FC<EditorProps> = ({
               padding: textInput.elementType === 'callout' ? `${10 * tab.scale}px` : '0',
               zIndex: 50,
             }}
-            placeholder="Type here..."
+            placeholder="在這裡輸入文字…"
           />
         )}
         </div>

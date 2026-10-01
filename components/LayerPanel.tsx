@@ -15,21 +15,21 @@ interface LayerPanelProps {
 }
 
 const TYPE_LABELS: Partial<Record<DrawingElement['type'], string>> = {
-  image: 'Image',
-  text: 'Text',
-  callout: 'Callout',
-  symbol: 'Symbol',
-  stamp: 'Stamp',
-  spotlight: 'Spotlight',
-  pen: 'Pen',
-  highlighter: 'Highlight',
-  rect: 'Rectangle',
-  circle: 'Circle',
-  triangle: 'Triangle',
-  diamond: 'Diamond',
-  line: 'Line',
-  arrow: 'Arrow',
-  pixelate: 'Mosaic',
+  image: '圖片',
+  text: '文字',
+  callout: '標註框',
+  symbol: '符號',
+  stamp: '印章',
+  spotlight: '聚光燈',
+  pen: '畫筆',
+  highlighter: '螢光筆',
+  rect: '矩形',
+  circle: '圓形',
+  triangle: '三角形',
+  diamond: '菱形',
+  line: '直線',
+  arrow: '箭頭',
+  pixelate: '馬賽克',
 };
 
 const TYPE_MARKS: Partial<Record<DrawingElement['type'], string>> = {
@@ -66,23 +66,23 @@ const LayerPanel: React.FC<LayerPanelProps> = ({
 
   if (collapsed) {
     return (
-      <aside className="hidden h-full w-10 shrink-0 flex-col items-center border-r border-slate-200 bg-white py-2 transition-[width] dark:border-slate-700 dark:bg-slate-800 md:flex">
-        <button type="button" onClick={() => setCollapsed(false)} className="rounded p-1.5 text-slate-500 hover:bg-slate-100 hover:text-brand-600 dark:text-slate-300 dark:hover:bg-slate-700" title="Expand layers">
+      <aside className="ui-panel panel-rail hidden h-full w-10 shrink-0 flex-col items-center border-r border-slate-200 bg-white py-2 transition-[width] dark:border-slate-700 dark:bg-slate-800 md:flex">
+        <button type="button" onClick={() => setCollapsed(false)} className="rounded p-1.5 text-slate-500 hover:bg-slate-100 hover:text-brand-600 dark:text-slate-300 dark:hover:bg-slate-700" title="展開圖層">
           <ChevronsRight size={16} />
         </button>
         <span className="mt-2 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 dark:bg-slate-700 dark:text-slate-300">{elements.length}</span>
-        <span className="mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-400" style={{ writingMode: 'vertical-rl' }}>Layers</span>
+        <span className="mt-3 text-[10px] font-semibold uppercase tracking-widest text-slate-400" style={{ writingMode: 'vertical-rl' }}>圖層</span>
       </aside>
     );
   }
 
   return (
-    <aside className="hidden h-full w-56 shrink-0 flex-col border-r border-slate-200 bg-white transition-[width] dark:border-slate-700 dark:bg-slate-800 md:flex">
+    <aside className="ui-panel hidden h-full w-56 shrink-0 flex-col border-r border-slate-200 bg-white transition-[width] dark:border-slate-700 dark:bg-slate-800 md:flex">
       <div className="flex h-10 items-center justify-between border-b border-slate-200 px-3 dark:border-slate-700">
-        <span className="text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">Layers</span>
+        <span className="text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">圖層</span>
         <div className="flex items-center gap-1">
           <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 dark:bg-slate-700 dark:text-slate-300">{elements.length}</span>
-          <button type="button" onClick={() => setCollapsed(true)} className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-brand-600 dark:hover:bg-slate-700" title="Collapse layers">
+          <button type="button" onClick={() => setCollapsed(true)} className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-brand-600 dark:hover:bg-slate-700" title="收合圖層">
             <ChevronsLeft size={14} />
           </button>
         </div>
@@ -90,7 +90,7 @@ const LayerPanel: React.FC<LayerPanelProps> = ({
 
       <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
         {visualElements.length === 0 && (
-          <p className="px-3 py-8 text-center text-xs text-slate-400">Objects will appear here.</p>
+          <p className="px-3 py-8 text-center text-xs text-slate-400">新增的標註與圖片會顯示在這裡。</p>
         )}
         {visualElements.map((element, visualIndex) => {
           const selected = selectedIds.includes(element.id);
@@ -146,7 +146,7 @@ const LayerPanel: React.FC<LayerPanelProps> = ({
                     setEditingName(element.name || fallbackName);
                   }}
                   className={`min-w-0 flex-1 truncate text-left text-xs ${element.hidden ? 'opacity-45 line-through' : ''}`}
-                  title="Double-click to rename"
+                  title="雙擊以重新命名"
                 >
                   {element.name || fallbackName}
                 </button>
@@ -156,7 +156,7 @@ const LayerPanel: React.FC<LayerPanelProps> = ({
                 type="button"
                 onClick={event => { event.stopPropagation(); onToggleVisibility(element.id); }}
                 className="rounded p-1 opacity-60 hover:bg-white hover:opacity-100 dark:hover:bg-slate-600"
-                title={element.hidden ? 'Show layer' : 'Hide layer'}
+                title={element.hidden ? '顯示圖層' : '隱藏圖層'}
               >
                 {element.hidden ? <EyeOff size={13} /> : <Eye size={13} />}
               </button>
@@ -164,7 +164,7 @@ const LayerPanel: React.FC<LayerPanelProps> = ({
                 type="button"
                 onClick={event => { event.stopPropagation(); onToggleLock(element.id); }}
                 className={`rounded p-1 hover:bg-white dark:hover:bg-slate-600 ${element.locked ? 'text-red-500' : 'opacity-60 hover:opacity-100'}`}
-                title={element.locked ? 'Unlock layer' : 'Lock layer'}
+                title={element.locked ? '解除圖層鎖定' : '鎖定圖層'}
               >
                 {element.locked ? <Lock size={13} /> : <Unlock size={13} />}
               </button>
@@ -175,9 +175,9 @@ const LayerPanel: React.FC<LayerPanelProps> = ({
 
       <div className="flex items-center gap-1 border-t border-slate-200 p-2 dark:border-slate-700">
         <button type="button" onClick={onDuplicate} disabled={selectedIds.length === 0} className="flex flex-1 items-center justify-center gap-1 rounded px-2 py-1.5 text-xs text-slate-600 hover:bg-slate-100 disabled:opacity-30 dark:text-slate-300 dark:hover:bg-slate-700">
-          <Copy size={13} /> Duplicate
+          <Copy size={13} /> 複製物件
         </button>
-        <button type="button" onClick={onDelete} disabled={selectedIds.length === 0} className="rounded p-1.5 text-red-500 hover:bg-red-50 disabled:opacity-30 dark:hover:bg-red-950/30" title="Delete selected">
+        <button type="button" onClick={onDelete} disabled={selectedIds.length === 0} className="rounded p-1.5 text-red-500 hover:bg-red-50 disabled:opacity-30 dark:hover:bg-red-950/30" title="刪除選取物件">
           <Trash2 size={14} />
         </button>
       </div>

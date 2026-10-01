@@ -6,24 +6,23 @@ import Editor from './components/Editor';
 import LayerPanel from './components/LayerPanel';
 import PropertiesPanel from './components/PropertiesPanel';
 import OperationHelp from './components/OperationHelp';
+import AppearanceMenu from './components/AppearanceMenu';
+import { createMaterialTheme, DEFAULT_THEME_COLOR, normalizeThemeColor } from './utils/appearance';
+import { applyElementStyle, applyToolSettingsToElement, getCreationSettings, getSettingsForElement, normalizeToolSize, rememberToolSettings, restoreToolSettings } from './utils/toolSettings';
 import './components/StatusBar.css';
+import './components/Appearance.css';
 import ExportDialog, { ExportOptions } from './components/ExportDialog';
 import CanvasSpaceDialog, { CanvasEdge } from './components/CanvasSpaceDialog';
 import { TabData, ToolType, ToolSettings, DrawingElement } from './types';
-import { DEFAULT_TOOL_SETTINGS, DEFAULT_TOOL_SIZES } from './constants';
+import { DEFAULT_TOOL_SETTINGS } from './constants';
 import { blobToDataURL, getElementBounds, renderCanvas } from './utils/draw';
 import { createDocumentSnapshot, createInitialSnapshot } from './utils/history';
 import { loadWorkspace, saveWorkspace } from './utils/storage';
 import { resizeCanvasDocument } from './utils/canvasResize';
+import { getCalloutWorldTip, withCalloutWorldTip } from './utils/callout';
 
 const DEFAULT_WIDTH = 800;
 const DEFAULT_HEIGHT = 600;
-const normalizeStampSize = (size: number | undefined) => {
-  const fallback = DEFAULT_TOOL_SIZES.stamp ?? 32;
-  if (size === undefined) return fallback;
-  return size < 20 ? (10 + size) * 2 : size;
-};
-const getStampDiameter = (element: DrawingElement) => element.stampSize ?? (10 + element.strokeWidth) * 2;
 const INTERNAL_CLIPBOARD_MARKER = 'webpicpick://internal-elements';
 
 // Add type definition for the global function called by Java
@@ -36,6 +35,17 @@ declare global {
 function App() {
   const [tabCounter, setTabCounter] = useState(1);
   const [darkMode, setDarkMode] = useState(false);
+  const [appearance, setAppearance] = useState<'original' | 'material'>(() => {
+    try {
+      return localStorage.getItem('painter-appearance') === 'material' ? 'material' : 'original';
+    } catch {
+      return 'original';
+    }
+  });
+  const [themeColor, setThemeColor] = useState(() => {
+    try { return normalizeThemeColor(localStorage.getItem('painter-theme-color')); }
+    catch { return DEFAULT_THEME_COLOR; }
+  });
   const [stampCounter, setStampCounter] = useState(1);
   const [clipboardElements, setClipboardElements] = useState<DrawingElement[]>([]);
   const [workspaceReady, setWorkspaceReady] = useState(false);
@@ -43,11 +53,18 @@ function App() {
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [canvasSpaceDialogOpen, setCanvasSpaceDialogOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    try { localStorage.setItem('painter-appearance', appearance); } catch { /* Local preferences are optional. */ }
+  }, [appearance]);
+  useEffect(() => {
+    try { localStorage.setItem('painter-theme-color', themeColor); } catch { /* Optional local preference. */ }
+  }, [themeColor]);
   
   const [tabs, setTabs] = useState<TabData[]>([
     {
       id: '1',
-      title: 'Image_001',
+      title: '圖片_001',
       imageDataUrl: null,
       elements: [],
       history: [createInitialSnapshot(null, DEFAULT_WIDTH, DEFAULT_HEIGHT)],
@@ -140,15 +157,7 @@ function App() {
         setTabCounter(saved.tabCounter);
         setStampCounter(saved.stampCounter);
         setDarkMode(saved.darkMode);
-        setToolSettings({
-          ...DEFAULT_TOOL_SETTINGS,
-          ...saved.toolSettings,
-          toolSizes: {
-            ...DEFAULT_TOOL_SIZES,
-            ...(saved.toolSettings.toolSizes || {}),
-            stamp: normalizeStampSize(saved.toolSettings.toolSizes?.stamp),
-          },
-        });
+        setToolSettings(restoreToolSettings(saved.toolSettings));
       } catch (error) {
         console.warn('Unable to restore the local workspace', error);
       } finally {
@@ -201,6 +210,7 @@ function App() {
   }, []);
 
   const commitElements = useCallback((elements: DrawingElement[]) => {
+    if (JSON.stringify(elements) === JSON.stringify(activeTab.elements)) return;
     const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
     newHistory.push(createDocumentSnapshot(activeTab, { elements }));
     updateTab(activeTabId, {
@@ -225,118 +235,24 @@ function App() {
     return Math.min(scaleW, scaleH, 1);
   }, []);
 
-  useEffect(() => {
-    if (selectedElementId) {
-        const el = activeTab.elements.find(e => e.id === selectedElementId);
-        if (el) {
-            setToolSettings(prev => ({
-                ...prev,
-                color: el.color,
-                strokeWidth: el.type === 'stamp' ? getStampDiameter(el) : el.strokeWidth,
-                fontSize: el.type === 'text' || el.type === 'callout' ? (el.fontSize ?? el.strokeWidth * 6) : prev.fontSize,
-                arrowStyle: el.arrowStyle ?? prev.arrowStyle,
-                stampStyle: el.stampStyle ?? prev.stampStyle,
-                symbol: el.symbol ?? prev.symbol,
-                pixelateStyle: el.pixelateStyle ?? prev.pixelateStyle,
-                highlighterStyle: el.highlighterStyle ?? prev.highlighterStyle,
-            }));
-        }
-    } else {
-        setToolSettings(prev => {
-            const rememberedSize = prev.toolSizes?.[activeTool] ?? DEFAULT_TOOL_SIZES[activeTool];
-            if (rememberedSize === undefined) return prev;
-            if (activeTool === 'text' || activeTool === 'callout') {
-                return prev.fontSize === rememberedSize ? prev : { ...prev, fontSize: rememberedSize };
-            }
-            return prev.strokeWidth === rememberedSize ? prev : { ...prev, strokeWidth: rememberedSize };
-        });
-    }
-  }, [selectedElementId, activeTab.elements, activeTool]);
+  const selectedElement = selectedElements[selectedElements.length - 1];
+  // Drawing controls configure the next object, even when the last placed object is selected.
+  const creationSettings = getCreationSettings(activeTool, toolSettings);
+  const toolbarSettings = activeTool === 'select' && selectedElement
+      ? getSettingsForElement(selectedElement, toolSettings) : creationSettings;
 
   const handleToolSettingsChange = (newSettings: ToolSettings) => {
-      const selectedElement = selectedElementId
-          ? activeTab.elements.find(element => element.id === selectedElementId)
-          : undefined;
-      const sizeOwner = selectedElement && selectedElement.type !== 'image'
-          ? selectedElement.type
-          : activeTool;
-      const activeToolSize = sizeOwner === 'text' || sizeOwner === 'callout' ? newSettings.fontSize : newSettings.strokeWidth;
-      // Editing a selected object must not silently change the size of the next object.
-      const shouldRememberSize = !selectedElement && DEFAULT_TOOL_SIZES[sizeOwner] !== undefined;
-      const nextSettings = shouldRememberSize
-          ? {
-              ...newSettings,
-              toolSizes: {
-                  ...newSettings.toolSizes,
-                  [sizeOwner]: activeToolSize,
-              },
-          }
-          : newSettings;
-
-      setToolSettings(nextSettings);
-      if (selectedElementId) {
-          const updatedElements = activeTab.elements.map(el => {
-              if (el.id === selectedElementId) {
-                  const isText = el.type === 'text' || el.type === 'callout';
-                  return {
-                      ...el,
-                      color: nextSettings.color,
-                      strokeWidth: el.type === 'callout'
-                          ? Math.min(4, Math.max(2, nextSettings.fontSize / 8))
-                          : isText ? Math.max(1, nextSettings.fontSize / 6) : nextSettings.strokeWidth,
-                      fontSize: isText ? nextSettings.fontSize : el.fontSize,
-                      stampSize: el.type === 'stamp' ? nextSettings.strokeWidth : el.stampSize,
-                      arrowStyle: el.type === 'arrow' ? nextSettings.arrowStyle : el.arrowStyle,
-                      stampStyle: el.type === 'stamp' ? nextSettings.stampStyle : el.stampStyle,
-                      symbol: el.type === 'symbol' ? nextSettings.symbol : el.symbol,
-                      pixelateStyle: el.type === 'pixelate' ? nextSettings.pixelateStyle : el.pixelateStyle,
-                      highlighterStyle: el.type === 'highlighter' ? nextSettings.highlighterStyle : el.highlighterStyle,
-                  };
-              }
-              return el;
-          });
-          const currentEl = activeTab.elements.find(e => e.id === selectedElementId);
-          if (currentEl && (
-              currentEl.color !== nextSettings.color ||
-              (currentEl.type === 'text' || currentEl.type === 'callout'
-                  ? (currentEl.fontSize ?? currentEl.strokeWidth * 6) !== nextSettings.fontSize
-                  : currentEl.type === 'stamp'
-                    ? getStampDiameter(currentEl) !== nextSettings.strokeWidth
-                    : currentEl.strokeWidth !== nextSettings.strokeWidth) ||
-              (currentEl.type === 'arrow' && currentEl.arrowStyle !== nextSettings.arrowStyle) ||
-              (currentEl.type === 'stamp' && currentEl.stampStyle !== nextSettings.stampStyle) ||
-              (currentEl.type === 'symbol' && currentEl.symbol !== nextSettings.symbol) ||
-              (currentEl.type === 'pixelate' && currentEl.pixelateStyle !== nextSettings.pixelateStyle) ||
-              (currentEl.type === 'highlighter' && currentEl.highlighterStyle !== nextSettings.highlighterStyle)
-             )) {
-             const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
-             newHistory.push(createDocumentSnapshot(activeTab, { elements: updatedElements }));
-             updateTab(activeTabId, { 
-                 elements: updatedElements,
-                 history: newHistory,
-                 historyIndex: newHistory.length - 1
-             });
-          }
+      if (activeTool === 'select' && selectedElement) {
+          commitElements(activeTab.elements.map(element => element.id === selectedElement.id
+              ? applyToolSettingsToElement(element, newSettings) : element));
+          return;
       }
+      setToolSettings(rememberToolSettings(activeTool, newSettings));
   };
 
   const handleToolSelect = (tool: ToolType) => {
       setActiveTool(tool);
       setSelectedElementId(null);
-      setToolSettings(previous => {
-          const storedSize = previous.toolSizes?.[tool] ?? DEFAULT_TOOL_SIZES[tool];
-          const rememberedSize = tool === 'stamp' ? normalizeStampSize(storedSize) : storedSize;
-          if (rememberedSize === undefined) return previous;
-          return tool === 'text' || tool === 'callout'
-              ? { ...previous, fontSize: rememberedSize }
-              : {
-                  ...previous,
-                  strokeWidth: rememberedSize,
-                  toolSizes: tool === 'stamp'
-                      ? { ...previous.toolSizes, stamp: rememberedSize }
-                      : previous.toolSizes,
-                };
-      });
   };
 
   const handleToggleLock = () => {
@@ -399,7 +315,7 @@ function App() {
           .map((element, index) => ({
               ...element,
               id: `${timestamp}-${index}`,
-              name: element.name ? `${element.name} copy` : undefined,
+              name: element.name ? `${element.name} 副本` : undefined,
               x: element.x === undefined ? undefined : element.x + 20,
               y: element.y === undefined ? undefined : element.y + 20,
               points: element.points?.map(point => ({ x: point.x + 20, y: point.y + 20 })),
@@ -429,20 +345,24 @@ function App() {
                   y: nextY + (point.y - bounds.y) * scaleY,
               }));
           } else if (updated.type === 'stamp' || updated.type === 'symbol') {
-              const requestedSize = values.width ?? values.height ?? Math.max(bounds.w, bounds.h);
+              const requestedSize = normalizeToolSize(updated.type, values.width ?? values.height ?? Math.max(bounds.w, bounds.h));
               updated.x = nextX + requestedSize / 2;
               updated.y = nextY + requestedSize / 2;
               if (updated.type === 'stamp') {
                   updated.stampSize = requestedSize;
                   updated.strokeWidth = requestedSize;
               } else {
-                  updated.strokeWidth = Math.max(8, requestedSize);
+                  updated.strokeWidth = requestedSize;
               }
           } else {
               updated.x = nextX + ((updated.x || 0) - bounds.x) * scaleX;
               updated.y = nextY + ((updated.y || 0) - bounds.y) * scaleY;
               if (updated.width !== undefined) updated.width *= scaleX;
               if (updated.height !== undefined) updated.height *= scaleY;
+          }
+          if (element.calloutTip) {
+              const originalTip = getCalloutWorldTip(element)!;
+              return withCalloutWorldTip(updated, { x: originalTip.x + nextX - bounds.x, y: originalTip.y + nextY - bounds.y });
           }
           return updated;
       });
@@ -453,14 +373,7 @@ function App() {
       if (selectedElementIds.length === 0) return;
       const updatedElements = activeTab.elements.map(element => {
           if (!selectedElementIds.includes(element.id) || element.locked) return element;
-          const updated = { ...element, ...values };
-          if (element.type === 'stamp' && values.strokeWidth !== undefined) updated.stampSize = values.strokeWidth;
-          if (values.fontSize !== undefined) {
-              updated.strokeWidth = element.type === 'callout'
-                  ? Math.min(4, Math.max(2, values.fontSize / 8))
-                  : element.type === 'text' ? Math.max(1, values.fontSize / 6) : updated.strokeWidth;
-          }
-          return updated;
+          return applyElementStyle(element, values);
       });
       commitElements(updatedElements);
   };
@@ -469,9 +382,7 @@ function App() {
       if (selectedElementIds.length === 0) return;
       const updatedElements = activeTab.elements.map(element => {
           if (!selectedElementIds.includes(element.id) || element.locked) return element;
-          const updated = { ...element, ...values };
-          if (element.type === 'stamp' && values.strokeWidth !== undefined) updated.stampSize = values.strokeWidth;
-          return updated;
+          return applyElementStyle(element, values);
       });
       updateTab(activeTabId, { elements: updatedElements });
   };
@@ -623,7 +534,7 @@ function App() {
 
   const createNewTab = (imgData: string | null = null, w = DEFAULT_WIDTH, h = DEFAULT_HEIGHT) => {
     const newId = Date.now().toString();
-    const title = `Image_${String(tabCounter).padStart(3, '0')}`;
+    const title = `圖片_${String(tabCounter).padStart(3, '0')}`;
     setTabCounter(prev => prev + 1);
     let initialScale = 1;
     if (imgData) {
@@ -649,7 +560,7 @@ function App() {
     e.stopPropagation();
     const tabToClose = tabs.find(t => t.id === id);
     if (tabToClose && (tabToClose.elements.length > 0 || tabToClose.imageDataUrl)) {
-        if (!window.confirm('This tab has unsaved changes. Close anyway?')) return;
+        if (!window.confirm('關閉這個分頁後，內容將從本機工作區移除。確定要關閉嗎？')) return;
     }
     if (tabs.length === 1) return;
     const newTabs = tabs.filter(t => t.id !== id);
@@ -727,7 +638,7 @@ function App() {
   const handlePasteImageClick = useCallback(async () => {
       const didPaste = await pasteImageFromSystemClipboard();
       if (!didPaste) {
-          alert('No image was found on the clipboard. Copy an image and try again.');
+          alert('剪貼簿中沒有圖片，請先複製圖片後再貼上。');
       }
   }, [pasteImageFromSystemClipboard]);
 
@@ -932,7 +843,7 @@ function App() {
                         ]);
                       } catch (err) {
                           console.error('Failed to copy', err);
-                          alert('Failed to copy to clipboard.');
+                          alert('複製到剪貼簿失敗，請確認瀏覽器允許存取剪貼簿後再試一次。');
                       }
                   }
               });
@@ -969,7 +880,7 @@ function App() {
                     const autoScale = calculateFitScale(canvas.width, canvas.height);
                     const newTab: TabData = {
                         id: newId,
-                        title: `Screen_${String(tabCounter).padStart(3, '0')}`,
+                        title: `螢幕擷取_${String(tabCounter).padStart(3, '0')}`,
                         imageDataUrl: dataUrl,
                         elements: [],
                         history: [createInitialSnapshot(dataUrl, canvas.width, canvas.height)],
@@ -1032,7 +943,7 @@ function App() {
   }, [performUndo, performRedo, handleDeleteSelected, handleCopy, handleDuplicateSelected]);
 
   const handleClearAll = () => {
-      if (window.confirm('Clear all drawings and layers? (Background image will remain)')) {
+      if (window.confirm('確定要清除所有標註與圖層嗎？背景圖片會保留。')) {
           const newHistory = activeTab.history.slice(0, activeTab.historyIndex + 1);
           newHistory.push(createDocumentSnapshot(activeTab, { elements: [] }));
           updateTab(activeTabId, {
@@ -1054,7 +965,7 @@ function App() {
     canvas.width = Math.max(1, Math.round(tab.canvasWidth * options.scale));
     canvas.height = Math.max(1, Math.round(tab.canvasHeight * options.scale));
     const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Unable to create an export canvas');
+    if (!ctx) throw new Error('無法建立匯出畫布');
 
     let bgImg: HTMLImageElement | null = null;
     if (tab.imageDataUrl) {
@@ -1128,7 +1039,7 @@ function App() {
   };
 
   return (
-    <div className="flex flex-col h-screen bg-slate-100 dark:bg-slate-900 transition-colors">
+    <div data-appearance={appearance} style={appearance === 'material' ? createMaterialTheme(themeColor, darkMode) as React.CSSProperties : undefined} className="painter-app flex flex-col h-screen bg-slate-100 dark:bg-slate-900 transition-colors">
       <TabList 
         tabs={tabs} 
         activeTabId={activeTabId} 
@@ -1141,7 +1052,7 @@ function App() {
       <Toolbar 
         currentTool={activeTool}
         setTool={handleToolSelect}
-        settings={toolSettings}
+        settings={toolbarSettings}
         setSettings={handleToolSettingsChange}
         canUndo={activeTab.historyIndex > 0}
         canRedo={activeTab.historyIndex < activeTab.history.length - 1}
@@ -1175,7 +1086,7 @@ function App() {
         multiple
       />
 
-      <div className="flex min-h-0 flex-1">
+      <div className="editor-workspace flex min-h-0 flex-1">
         <LayerPanel
           elements={activeTab.elements}
           selectedIds={selectedElementIds}
@@ -1192,7 +1103,7 @@ function App() {
           key={activeTabId}
           tab={activeTab}
           activeTool={activeTool}
-          toolSettings={toolSettings}
+          toolSettings={creationSettings}
           updateTab={updateTab}
           selectedElementId={selectedElementId}
           setSelectedElementId={setSelectedElementId}
@@ -1243,10 +1154,10 @@ function App() {
                 type="button"
                 onClick={() => setCanvasSpaceDialogOpen(true)}
                 className="editor-statusbar-add inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-brand-700 hover:bg-brand-100 dark:text-brand-300 dark:hover:bg-slate-700"
-                title="Add blank space around the canvas"
+                title="在畫布邊緣增加空白"
                 aria-label="增加畫布留白"
              >
-                <PanelTopOpen size={13} /> <span className="editor-statusbar-add-label">Add space</span>
+                <PanelTopOpen size={13} /> <span className="editor-statusbar-add-label">增加留白</span>
              </button>
          </div>
 
@@ -1254,7 +1165,7 @@ function App() {
             <button 
                 onClick={() => setScale(calculateFitScale(activeTab.canvasWidth, activeTab.canvasHeight))}
                 className="p-0.5 hover:bg-brand-100 dark:hover:bg-slate-700 rounded text-brand-700 dark:text-brand-400"
-                title="Fit to Screen"
+                title="縮放至符合視窗"
                 aria-label="縮放至符合視窗"
             >
                 <Maximize size={12} />
@@ -1292,9 +1203,10 @@ function App() {
          </div>
 
          <div className="editor-statusbar-actions">
-             <div className={`editor-statusbar-save text-[11px] ${saveStatus === 'error' ? 'text-red-500' : 'opacity-70'}`} title="Workspace is automatically stored in this browser">
-                 {saveStatus === 'loading' ? 'Restoring…' : saveStatus === 'saving' ? 'Saving…' : saveStatus === 'error' ? 'Save failed' : 'Saved locally'}
+             <div className={`editor-statusbar-save text-[11px] ${saveStatus === 'error' ? 'text-red-500' : 'opacity-70'}`} title="工作區會自動儲存在目前的瀏覽器">
+                 {saveStatus === 'loading' ? '還原中…' : saveStatus === 'saving' ? '儲存中…' : saveStatus === 'error' ? '儲存失敗' : '已儲存於本機'}
              </div>
+             <AppearanceMenu appearance={appearance} onAppearanceChange={setAppearance} color={themeColor} onColorChange={setThemeColor} />
              <OperationHelp />
          </div>
       </div>

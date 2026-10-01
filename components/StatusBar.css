@@ -1,6 +1,6 @@
 .editor-statusbar {
   position: relative;
-  z-index: 40;
+  z-index: 60;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
@@ -42,4 +42,15 @@
   .editor-statusbar-unit { display: none; }
   .editor-statusbar-dimension { width: 36px; }
   .editor-statusbar-zoom { gap: 4px; }
+}
+
+@media (max-width: 539px) {
+  .painter-app .editor-statusbar {
+    height: 68px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: 30px 30px;
+    gap: 0 8px;
+    padding: 4px 8px;
+  }
+  .editor-statusbar-actions { grid-column: 1 / -1; }
 }

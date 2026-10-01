@@ -39,10 +39,12 @@ export interface DrawingElement {
   textAlign?: TextAlignment;
   lineHeight?: number;
   calloutTail?: CalloutTail;
+  calloutTip?: Point; // Arrow endpoint offset from x/y, before applying the element's rotation.
   spotlightShape?: SpotlightShape;
   spotlightOpacity?: number;
   pixelateStyle?: PixelateStyle;
   highlighterStyle?: HighlighterStyle;
+  highlighterWidth?: number; // Actual brush diameter; absent in legacy documents (strokeWidth * 3).
   rotation?: number; // Rotation in radians
   locked?: boolean; // if true, cannot be moved or resized
 }

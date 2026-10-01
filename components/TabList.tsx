@@ -47,7 +47,7 @@ const TabList: React.FC<TabListProps> = ({ tabs, activeTabId, onSwitch, onClose,
   };
 
   return (
-    <div className="flex items-center w-full bg-slate-200 dark:bg-slate-900 pt-1 px-1 gap-1 overflow-x-auto no-scrollbar border-b border-slate-300 dark:border-slate-700 select-none h-[34px] transition-colors">
+    <div className="tab-strip flex items-center w-full bg-slate-200 dark:bg-slate-900 pt-1 px-1 gap-1 overflow-x-auto no-scrollbar border-b border-slate-300 dark:border-slate-700 select-none h-[34px] transition-colors">
       {tabs.map((tab) => {
         const isActive = tab.id === activeTabId;
         const isEditing = tab.id === editingId;
@@ -55,9 +55,10 @@ const TabList: React.FC<TabListProps> = ({ tabs, activeTabId, onSwitch, onClose,
         return (
           <div
             key={tab.id}
+            data-active={isActive}
             onClick={() => !isEditing && onSwitch(tab.id)}
             className={`
-              group flex items-center gap-1.5 px-3 py-1.5 rounded-t-md text-xs font-medium cursor-pointer min-w-[100px] max-w-[180px] border-t border-x transition-colors
+              document-tab group flex items-center gap-1.5 px-3 py-1.5 rounded-t-md text-xs font-medium cursor-pointer min-w-[100px] max-w-[180px] border-t border-x transition-colors
               ${isActive 
                 ? 'bg-white dark:bg-slate-800 text-brand-600 dark:text-brand-400 border-slate-300 dark:border-slate-700 border-b-white dark:border-b-slate-800 -mb-px z-10 h-full' 
                 : 'bg-slate-100 dark:bg-slate-950 text-slate-500 dark:text-slate-400 border-transparent hover:bg-slate-50 dark:hover:bg-slate-900 hover:text-slate-700 dark:hover:text-slate-300 h-[calc(100%-2px)] mt-[2px]'
@@ -80,7 +81,7 @@ const TabList: React.FC<TabListProps> = ({ tabs, activeTabId, onSwitch, onClose,
                 <span 
                     className="truncate flex-1"
                     onDoubleClick={(e) => startEditing(tab.id, tab.title, e)}
-                    title="Double click to rename"
+                    title="雙擊以重新命名"
                 >
                     {tab.title}
                 </span>
@@ -89,6 +90,8 @@ const TabList: React.FC<TabListProps> = ({ tabs, activeTabId, onSwitch, onClose,
             {!isEditing && (
                 <button
                 onClick={(e) => onClose(tab.id, e)}
+                aria-label={`關閉分頁：${tab.title}`}
+                title="關閉分頁"
                 className={`p-0.5 rounded-full hover:bg-slate-300/50 dark:hover:bg-slate-600/50 ${tabs.length === 1 ? 'hidden' : ''}`}
                 >
                 <X size={10} />
@@ -101,7 +104,7 @@ const TabList: React.FC<TabListProps> = ({ tabs, activeTabId, onSwitch, onClose,
       <button
         onClick={onAdd}
         className="ml-1 p-1 text-slate-500 hover:bg-slate-300 dark:text-slate-400 dark:hover:bg-slate-800 rounded-md transition-colors"
-        title="New Tab"
+        title="新增分頁"
       >
         <Plus size={14} />
       </button>
