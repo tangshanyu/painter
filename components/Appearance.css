@@ -39,30 +39,30 @@
   --md-error: #f2b8b5;
   --md-error-container: #601410;
 }
-[data-appearance='material'] .editor-workspace { gap: 8px; padding: 0 8px 8px; }
+[data-appearance='material'] .editor-workspace { gap: 4px; padding: 0 4px 4px; }
 [data-appearance='material'] [data-editor-viewport] {
   background: var(--md-surface-high);
-  border-radius: 24px;
+  border-radius: 16px;
   scrollbar-color: var(--md-outline) transparent;
 }
 [data-appearance='material'] .tab-strip {
   width: auto;
-  height: 46px;
-  min-height: 46px;
-  margin: 0 8px;
-  padding: 7px 4px 3px;
-  gap: 6px;
+  height: 36px;
+  min-height: 36px;
+  margin: 0;
+  padding: 3px 4px;
+  gap: 4px;
   background: var(--md-surface);
   border: 0;
 }
 [data-appearance='material'] .document-tab {
-  height: 34px;
+  height: 28px;
   margin: 0;
   border: 0;
   border-radius: 999px;
   background: var(--md-surface-container);
   color: var(--md-on-surface-variant);
-  padding: 6px 14px;
+  padding: 4px 8px;
 }
 [data-appearance='material'] .document-tab[data-active='true'] {
   background: var(--md-secondary-container);
@@ -70,24 +70,24 @@
 }
 [data-appearance='material'] .editor-toolbar {
   width: auto;
-  min-height: 64px;
-  margin: 8px;
-  padding: 8px 10px;
-  gap: 8px;
+  min-height: 48px;
+  margin: 0;
+  padding: 4px 6px;
+  gap: 4px;
   border: 0;
-  border-radius: 24px;
+  border-radius: 16px;
   background: var(--md-surface-container);
   box-shadow: none;
 }
 [data-appearance='material'] .tool-group {
-  padding: 4px;
-  gap: 2px;
-  border-radius: 20px;
+  padding: 2px;
+  gap: 1px;
+  border-radius: 12px;
   background: var(--md-surface-high);
 }
 [data-appearance='material'] .editor-toolbar button { border-radius: 999px; transition: background-color 160ms ease, box-shadow 160ms ease; }
 [data-appearance='material'] .tool-group > button,
-[data-appearance='material'] .tool-group > .relative > button { min-width: 36px; min-height: 36px; box-shadow: none; }
+[data-appearance='material'] .tool-group > .relative > button { min-width: 32px; min-height: 32px; box-shadow: none; }
 [data-appearance='material'] .tool-group > button[aria-pressed='true'],
 [data-appearance='material'] .tool-group > .relative > button[aria-pressed='true'] {
   background: var(--md-primary-container);
@@ -95,8 +95,8 @@
   box-shadow: none;
   --tw-ring-shadow: 0 0 transparent;
 }
-[data-appearance='material'] .toolbar-actions button { min-height: 36px; }
-[data-appearance='material'] .toolbar-actions [data-action] { padding: 8px 12px; box-shadow: none; }
+[data-appearance='material'] .toolbar-actions button { min-height: 32px; }
+[data-appearance='material'] .toolbar-actions [data-action] { box-shadow: none; }
 [data-appearance='material'] .toolbar-actions [data-action='tonal'] {
   background: var(--md-secondary-container);
   color: var(--md-on-secondary-container);
@@ -111,7 +111,7 @@
 }
 [data-appearance='material'] .panel-rail { width: 48px; padding-top: 10px; }
 [data-appearance='material'] .ui-panel button { border-radius: 12px; }
-[data-appearance='material'] .ui-panel section { padding: 16px; }
+[data-appearance='material'] .ui-panel section { padding: 12px; }
 [data-appearance='material'] .ui-popover {
   border: 1px solid var(--md-outline-variant);
   border-radius: 24px;
@@ -157,7 +157,7 @@
 [data-appearance='material'] :is(.editor-toolbar, .ui-panel, .ui-dialog, .empty-state, .tab-strip) button:not(:disabled):hover { box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--md-primary) 8%, transparent); }
 [data-appearance='material'] :is(button, input, select):focus-visible { outline: 2px solid var(--md-primary); outline-offset: 3px; }
 
-[data-appearance='material'] .editor-statusbar { height: 44px; border: 0; padding: 0 16px; color: var(--md-on-surface-variant); background: var(--md-surface); }
+[data-appearance='material'] .editor-statusbar { height: 36px; border: 0; padding: 0 12px; color: var(--md-on-surface-variant); background: var(--md-surface); }
 [data-appearance='material'] .editor-statusbar-zoom > div { padding: 5px 10px; border-radius: 999px; border-color: var(--md-outline-variant); background: var(--md-surface-high); }
 [data-appearance='material'] .editor-statusbar :is(button, .editor-statusbar-dimension) { border-radius: 999px; color: var(--md-primary); }
 [data-appearance='material'] .operation-help {
@@ -175,10 +175,9 @@
 [data-appearance='material'] .operation-help-row kbd { border-radius: 6px; }
 
 @media (max-width: 700px) {
-  [data-appearance='material'] .tool-group { flex-wrap: wrap; flex: 1 1 100%; min-width: 0; }
-  [data-appearance='material'] .editor-toolbar { margin: 6px; padding: 6px; gap: 6px; }
-  [data-appearance='material'] .editor-workspace { padding: 0 6px 6px; }
-  [data-appearance='material'] .toolbar-actions [data-action] { padding: 8px; }
+  [data-appearance='material'] .tool-group { flex-wrap: nowrap; flex: 0 0 auto; }
+  [data-appearance='material'] .editor-toolbar { margin: 0; padding: 4px 6px; gap: 4px; }
+  [data-appearance='material'] .editor-workspace { padding: 0 4px 4px; }
   [data-appearance='material'] .editor-statusbar { padding: 0 8px; }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -187,5 +186,5 @@
 
 
 @media (max-width: 539px) {
-  [data-appearance='material'] .editor-statusbar { height: 76px; grid-template-rows: 34px 34px; padding: 4px 8px; }
+  [data-appearance='material'] .editor-statusbar { height: 68px; grid-template-rows: 30px 30px; padding: 4px 8px; }
 }

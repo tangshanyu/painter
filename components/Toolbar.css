@@ -1,0 +1,34 @@
+/* Layout is shared by both appearances; theme rules only change color and shape. */
+.editor-toolbar {
+  display: flex; flex-wrap: nowrap; align-items: center; gap: 4px;
+  height: 48px; min-height: 48px; flex: 0 0 48px;
+  padding: 4px 6px; margin: 0; min-width: 0; overflow: visible;
+}
+.editor-toolbar .tool-group { display: flex; flex-wrap: nowrap; flex: 0 0 auto; gap: 1px; padding: 2px; }
+.editor-toolbar .tool-group > button,
+.editor-toolbar .tool-group > .relative > button,
+.editor-toolbar .toolbar-icon { width: 32px; height: 32px; min-width: 32px; min-height: 32px; padding: 6px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.editor-toolbar .toolbar-history { display: flex; gap: 1px; margin-left: 2px; border-left: 1px solid #94a3b833; padding-left: 4px; }
+.editor-toolbar .toolbar-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; flex: 0 0 auto; }
+.editor-toolbar .toolbar-actions > button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 32px; height: 32px; padding: 4px 8px; border-radius: 8px; font-size: 12px; white-space: nowrap; }
+.editor-toolbar[data-labels='false'] .toolbar-actions > button { width: 32px; padding: 6px; }
+.editor-toolbar[data-labels='false'] .toolbar-actions > button span { display: none; }
+.editor-toolbar button:disabled { opacity: .35; cursor: default; }
+.editor-toolbar .toolbar-icon:not(:disabled):hover { background: #94a3b822; }
+.editor-toolbar .toolbar-popover { position: fixed; left: var(--toolbar-popover-left, 8px); top: var(--toolbar-popover-top, 86px); transform: none; margin: 0; max-width: calc(100vw - 16px); max-height: calc(100dvh - 130px); overflow-y: auto; overscroll-behavior: contain; }
+.editor-toolbar .toolbar-settings { width: 260px; justify-content: flex-start; align-items: center; }
+.editor-toolbar .toolbar-more { width: 340px; justify-content: flex-start; font-size: 12px; color: inherit; }
+.toolbar-tool-grid, .toolbar-menu-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; width: 100%; }
+.toolbar-tool-grid button, .toolbar-menu-grid button { display: flex; align-items: center; gap: 7px; text-align: left; padding: 7px 8px; min-height: 32px; border-radius: 7px; }
+.toolbar-tool-grid button:hover, .toolbar-menu-grid button:not(:disabled):hover { background: #94a3b822; }
+.toolbar-tool-grid button[aria-pressed='true'] { background: #0284c722; color: #0284c7; }
+.toolbar-tool-grid button span { min-width: 0; }
+.painter-app .tab-strip { height: 36px; min-height: 36px; padding: 3px 4px; gap: 4px; margin: 0; }
+.painter-app .document-tab { height: 28px; flex: 0 0 auto; margin: 0; padding: 4px 8px; }
+.document-open { position: sticky; left: 0; z-index: 20; display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; height: 28px; padding: 4px 7px; border-radius: 7px; font-size: 12px; color: inherit; background: inherit; }
+.document-open:hover { box-shadow: inset 0 0 0 999px #94a3b822; }
+.painter-app .editor-workspace { gap: 4px; padding: 0 4px 4px; }
+.painter-app .editor-statusbar { height: 36px; }
+.painter-app .document-start { overflow-y: auto; }
+@media (max-width: 539px) { .painter-app .editor-statusbar { height: 68px; } }
+@media (max-width: 359px) { .editor-toolbar .symbol-library-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); } }

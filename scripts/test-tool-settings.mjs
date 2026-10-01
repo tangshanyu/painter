@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const bundled = await build({
-  stdin: { contents: `export * from './utils/toolSettings'; export * from './utils/appearance'; export * from './utils/callout'; export { resizeCanvasDocument } from './utils/canvasResize'; export { createDocumentSnapshot } from './utils/history'; export { getElementBounds, getResizeHandleType, isPointInElement, renderCanvas } from './utils/draw'; export { DEFAULT_TOOL_SETTINGS, DEFAULT_TOOL_SIZES } from './constants';`, resolveDir: root, loader: 'ts' },
+  stdin: { contents: `export * from './utils/toolSettings'; export * from './utils/appearance'; export * from './utils/callout'; export * from './utils/documents'; export * from './utils/toolbarLayout'; export { resizeCanvasDocument } from './utils/canvasResize'; export { createDocumentSnapshot } from './utils/history'; export { getElementBounds, getResizeHandleType, isPointInElement, renderCanvas } from './utils/draw'; export { DEFAULT_TOOL_SETTINGS, DEFAULT_TOOL_SIZES } from './constants';`, resolveDir: root, loader: 'ts' },
   bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'silent',
 });
 const api = await import(`data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString('base64')}`);
@@ -160,3 +160,27 @@ for (const [tip, side] of targets) {
 equal(getCalloutTailGeometry(createCalloutDraft(calloutStart, { x: 180, y: 120 }, calloutSettings, 800, 600)), null, 'Endpoint inside box does not create an inverted tail');
 equal(getCalloutTailGeometry({ type: 'callout', x: 100, y: 100, width: 280, height: 58, strokeWidth: 2, fontSize: 18, calloutTail: 'top-left' }), null, 'Legacy fixed-corner callouts retain their renderer');
 console.log(`Passed ${checks} total assertions including free-endpoint callouts, legacy compatibility, transforms, history and exports.`);
+
+const { createEmptyDocument, closeDocument, getToolbarLayout } = api;
+const blank = createEmptyDocument('a',' 測試 ');
+equal(blank.title,'測試','New document trims title');
+equal(blank.imageDataUrl,null,'New tab starts at image-import initial page');
+equal(blank.elements,[],'New tab starts without layers');
+equal([blank.canvasWidth,blank.canvasHeight,blank.scale],[800,600,1],'Plus uses original defaults without a size dialog');
+equal(blank.history[0].canvasWidth,800,'New document retains its initial undo snapshot');
+const docs = [blank,createEmptyDocument('b','B'),createEmptyDocument('c','C')];
+equal(closeDocument(docs,'b','b').activeId,'c','Closing active document selects adjacent document');
+equal(closeDocument(docs,'c','a').activeId,'c','Closing inactive document retains selection');
+equal(closeDocument(docs,'c','c').activeId,'b','Closing final-position document selects previous one');
+equal(closeDocument([blank],'a','a'),{tabs:[],activeId:''},'Closing last document returns to start');
+equal(closeDocument(docs,'a','missing'),{tabs:docs,activeId:'a'},'Stale close request is harmless');
+equal(docs.length,3,'Close helper never mutates other documents');
+for (const width of [320,375,419,420,599,600,799,800,1049,1050,1199,1200,1440]) {
+  const layout = getToolbarLayout(width);
+  ok(layout.direct.includes('select') && layout.direct.includes('text'),'Essential drawing tools remain visible');
+  equal(layout.quickSettings,width>=420,'Tiny toolbar moves settings into popup');
+  equal(layout.history,width>=600,'Narrow toolbar keeps undo/redo accessible in more menu');
+  equal(layout.labels,width>=1200,'Labels only use extra space at wide widths');
+  ok(new Set(layout.direct).size===layout.direct.length,'Toolbar does not duplicate visible tools');
+}
+console.log(`Passed ${checks} total assertions including compact-toolbar policies and new/close document workflows.`);

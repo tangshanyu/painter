@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { X, Plus, Image as ImageIcon } from 'lucide-react';
+import { X, Plus, FolderOpen, Image as ImageIcon } from 'lucide-react';
 import { TabData } from '../types';
 
 interface TabListProps {
@@ -8,10 +8,11 @@ interface TabListProps {
   onSwitch: (id: string) => void;
   onClose: (id: string, e: React.MouseEvent) => void;
   onAdd: () => void;
+  onOpen: () => void;
   onRename: (id: string, newTitle: string) => void;
 }
 
-const TabList: React.FC<TabListProps> = ({ tabs, activeTabId, onSwitch, onClose, onAdd, onRename }) => {
+const TabList: React.FC<TabListProps> = ({ tabs, activeTabId, onSwitch, onClose, onAdd, onOpen, onRename }) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
@@ -48,6 +49,7 @@ const TabList: React.FC<TabListProps> = ({ tabs, activeTabId, onSwitch, onClose,
 
   return (
     <div className="tab-strip flex items-center w-full bg-slate-200 dark:bg-slate-900 pt-1 px-1 gap-1 overflow-x-auto no-scrollbar border-b border-slate-300 dark:border-slate-700 select-none h-[34px] transition-colors">
+      <button type="button" onClick={onOpen} aria-label="開啟檔案" title="開啟圖片檔案" className="document-open"><FolderOpen size={14} /><span>開啟</span></button>
       {tabs.map((tab) => {
         const isActive = tab.id === activeTabId;
         const isEditing = tab.id === editingId;
@@ -92,7 +94,7 @@ const TabList: React.FC<TabListProps> = ({ tabs, activeTabId, onSwitch, onClose,
                 onClick={(e) => onClose(tab.id, e)}
                 aria-label={`關閉分頁：${tab.title}`}
                 title="關閉分頁"
-                className={`p-0.5 rounded-full hover:bg-slate-300/50 dark:hover:bg-slate-600/50 ${tabs.length === 1 ? 'hidden' : ''}`}
+                className="p-0.5 rounded-full hover:bg-slate-300/50 dark:hover:bg-slate-600/50"
                 >
                 <X size={10} />
                 </button>
@@ -100,14 +102,8 @@ const TabList: React.FC<TabListProps> = ({ tabs, activeTabId, onSwitch, onClose,
           </div>
         );
       })}
+      <button type="button" onClick={onAdd} aria-label="新增分頁" title="新增分頁" className="document-add ml-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-500 hover:bg-slate-300/50 dark:text-slate-400 dark:hover:bg-slate-800"><Plus size={14} /></button>
       
-      <button
-        onClick={onAdd}
-        className="ml-1 p-1 text-slate-500 hover:bg-slate-300 dark:text-slate-400 dark:hover:bg-slate-800 rounded-md transition-colors"
-        title="新增分頁"
-      >
-        <Plus size={14} />
-      </button>
     </div>
   );
 };

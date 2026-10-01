@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { 
   MousePointer2, 
   Pen, 
@@ -37,12 +37,16 @@ import {
   MessageSquareText,
   Focus,
   SmilePlus,
-  Star
+  Star,
+  MoreHorizontal,
+  SlidersHorizontal
 } from 'lucide-react';
 import { ToolType, ToolSettings, DrawingElement, StampStyle } from '../types';
 import { COLORS } from '../constants';
 import { getMinimumToolSize } from '../utils/toolSettings';
 import './SymbolLibrary.css';
+import './Toolbar.css';
+import { getToolbarLayout } from '../utils/toolbarLayout';
 
 interface ToolbarProps {
   currentTool: ToolType;
@@ -100,7 +104,29 @@ const Toolbar: React.FC<ToolbarProps> = ({
   setStampCounter
 }) => {
   const toolbarRef = useRef<HTMLDivElement>(null);
-  const [openPopover, setOpenPopover] = useState<'draw' | 'shape' | 'color' | 'size' | 'symbols' | null>(null);
+  type Popover = 'draw' | 'shape' | 'color' | 'size' | 'symbols' | 'settings' | 'more';
+  const [openPopover, setOpenPopover] = useState<Popover | null>(null);
+  const [availableWidth, setAvailableWidth] = useState(0);
+  const layout = getToolbarLayout(availableWidth);
+  useLayoutEffect(() => {
+    const toolbar = toolbarRef.current;
+    if (!toolbar) return;
+    const observer = new ResizeObserver(() => setAvailableWidth(toolbar.clientWidth));
+    setAvailableWidth(toolbar.clientWidth);
+    observer.observe(toolbar);
+    return () => observer.disconnect();
+  }, []);
+  useLayoutEffect(() => {
+    const toolbar = toolbarRef.current;
+    if (!toolbar || !openPopover) return;
+    const popup = toolbar.querySelector<HTMLElement>('.toolbar-popover');
+    const anchor = toolbar.querySelector<HTMLElement>('button[aria-expanded="true"]');
+    if (!popup || !anchor) return;
+    const rect = anchor.getBoundingClientRect();
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - popup.offsetWidth - 8));
+    toolbar.style.setProperty('--toolbar-popover-left', `${left}px`);
+    toolbar.style.setProperty('--toolbar-popover-top', `${toolbar.getBoundingClientRect().bottom + 4}px`);
+  }, [openPopover, availableWidth, settings]);
   const [symbolSearch, setSymbolSearch] = useState('');
   const [symbolCategory, setSymbolCategory] = useState<'all' | 'marks' | 'hands' | 'status' | 'emoji' | 'recent' | 'favorites'>('all');
   const [recentSymbols, setRecentSymbols] = useState<string[]>(() => {
@@ -144,7 +170,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
     setOpenPopover(null);
   };
 
-  const togglePopover = (popover: 'draw' | 'shape' | 'color' | 'size' | 'symbols') => {
+  const togglePopover = (popover: Popover) => {
     setOpenPopover(current => current === popover ? null : popover);
   };
   
@@ -306,16 +332,17 @@ const Toolbar: React.FC<ToolbarProps> = ({
   };
 
   // Glass panel style
-  const glassPanelClass = "ui-popover absolute top-full mt-2 left-1/2 -translate-x-1/2 p-3 rounded-2xl backdrop-blur-xl bg-white/90 dark:bg-slate-800/95 border border-white/50 dark:border-slate-600/50 shadow-2xl ring-1 ring-black/5 flex flex-wrap gap-2 min-w-[180px] justify-center z-50";
+  const glassPanelClass = "ui-popover toolbar-popover p-3 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600 shadow-xl flex flex-wrap gap-2 min-w-[180px] justify-center z-50";
+  const visibleTool = (tool: ToolType) => layout.direct.includes(tool) || currentTool === tool;
 
   return (
-    <div ref={toolbarRef} className="editor-toolbar w-full bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 px-2 py-1 flex flex-wrap items-center gap-1.5 shadow-sm z-50 sticky top-0 transition-colors min-h-12 overflow-visible">
+    <div ref={toolbarRef} data-labels={layout.labels} className="editor-toolbar w-full bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 z-50 sticky top-0 transition-colors" role="toolbar" aria-label="編輯工具列">
       
       {/* Tools Group */}
       <div className="tool-group flex bg-slate-100 dark:bg-slate-700 p-0.5 rounded-lg gap-0.5 shrink-0">
         
         {/* Render Select, Hand, Crop, Eraser first */}
-        {mainTools.slice(0, 4).map((t) => (
+        {mainTools.slice(0, 4).filter(t => visibleTool(t.id)).map((t) => (
           <button
             key={t.id}
             onClick={() => selectTool(t.id as ToolType)}
@@ -373,7 +400,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
         </div>
 
         {/* Shapes Group */}
-        <div className="relative">
+        {(layout.shapes || isShapeActive) && <div className="relative">
             <button
                 onClick={() => {
                   setTool(lastShape);
@@ -413,8 +440,9 @@ const Toolbar: React.FC<ToolbarProps> = ({
             </div>}
         </div>
 
+        }
         {/* Render remaining direct tools */}
-        {mainTools.slice(4).map((t) => (
+        {mainTools.slice(4).filter(t => visibleTool(t.id)).map((t) => (
           <button
             key={t.id}
             onClick={() => selectTool(t.id as ToolType)}
@@ -431,7 +459,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
           </button>
         ))}
 
-        <div className="relative">
+        {(layout.symbols || currentTool === 'symbol') && <div className="relative">
           <button
             onClick={() => {
               setTool('symbol');
@@ -474,7 +502,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
                   </button>
                 ))}
               </div>
-              <div className="grid max-h-52 w-full grid-cols-7 gap-1.5 overflow-y-auto p-0.5">
+              <div className="symbol-library-grid grid max-h-52 w-full grid-cols-7 gap-1.5 overflow-y-auto p-0.5">
                 {filteredSymbols.map(item => (
                   <div key={item.label} className="symbol-item relative">
                     <button
@@ -507,14 +535,12 @@ const Toolbar: React.FC<ToolbarProps> = ({
               )}
             </div>
           )}
-        </div>
+        </div>}
 
       </div>
 
-      <div className="w-px h-6 bg-slate-300 dark:bg-slate-600 mx-1 shrink-0"></div>
-
       {/* Color Picker (Liquid Glass Popover) */}
-      <div className="relative shrink-0">
+      {layout.quickSettings && <div className="relative shrink-0">
           <button 
               onClick={() => togglePopover('color')}
               aria-expanded={openPopover === 'color'}
@@ -552,10 +578,10 @@ const Toolbar: React.FC<ToolbarProps> = ({
                     />
                 </div>
           </div>}
-      </div>
+      </div>}
 
       {/* Each tool keeps its own remembered size. */}
-      {supportsSize && <div className="relative shrink-0">
+      {supportsSize && layout.quickSettings && <div className="relative shrink-0">
           <button 
               onClick={() => togglePopover('size')}
               aria-expanded={openPopover === 'size'}
@@ -634,10 +660,15 @@ const Toolbar: React.FC<ToolbarProps> = ({
           </div>}
       </div>}
 
-      {/* Contextual Inline Tools (Keep these accessible) */}
+      <div className="relative shrink-0">
+        <button type="button" title="目前工具設定" aria-label="目前工具設定" aria-expanded={openPopover === 'settings'} onClick={() => togglePopover('settings')} className="toolbar-icon text-slate-600 dark:text-slate-300"><SlidersHorizontal size={18} /></button>
+        {openPopover === 'settings' && <div className={`${glassPanelClass} toolbar-settings`} role="dialog" aria-label="目前工具設定">
+          <strong className="w-full text-xs text-slate-700 dark:text-slate-200">{editingElement ? '已選物件設定' : '下一個物件設定'}</strong>
+          <label className="flex w-full items-center justify-between text-xs text-slate-600 dark:text-slate-300">顏色<input type="color" aria-label="工具顏色" value={settings.color} onChange={event => setSettings({ ...settings, color: event.target.value })} /></label>
+          {supportsSize && <label className="flex w-full items-center justify-between gap-3 text-xs text-slate-600 dark:text-slate-300">{sizeLabel}<input key={`${sizeTarget}-${currentSize}`} aria-label={`設定${sizeLabel}`} type="number" min={getMinimumToolSize(sizeTarget)} defaultValue={currentSize} className="w-20 rounded border border-slate-300 bg-transparent p-1 dark:border-slate-600" onBlur={event => { if (event.target.value.trim() === '') return; const size = Number(event.target.value); if (Number.isFinite(size)) setSettings(isTextSize ? { ...settings, fontSize: Math.max(getMinimumToolSize(sizeTarget), size) } : { ...settings, strokeWidth: Math.max(getMinimumToolSize(sizeTarget), size) }); }} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }} /></label>}
+      {/* Tool-specific options live in a popup and never change the toolbar height. */}
       {(contextualTool === 'arrow' || contextualTool === 'stamp' || contextualTool === 'pixelate' || contextualTool === 'highlighter') && (
         <>
-            <div className="w-px h-6 bg-slate-300 dark:bg-slate-600 mx-1 shrink-0"></div>
             
             {contextualTool === 'stamp' && (
                 <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-700 p-0.5 rounded-md">
@@ -668,6 +699,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
                         <span className="text-xs font-medium text-slate-500 dark:text-slate-400">編號</span>
                         <input 
                             type="number"
+                            aria-label="印章編號"
                             value={stampCounter}
                             onChange={(e) => setStampCounter(parseInt(e.target.value) || 1)}
                             className="w-10 h-6 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded px-1 text-xs text-center focus:outline-none focus:ring-1 focus:ring-brand-500 dark:text-slate-200"
@@ -758,156 +790,45 @@ const Toolbar: React.FC<ToolbarProps> = ({
             )}
         </>
       )}
-
-      <div className="w-px h-6 bg-slate-300 dark:bg-slate-600 mx-1 shrink-0"></div>
-
-      {/* Undo/Redo/Clear Group */}
-      <div className="flex gap-0.5 shrink-0">
-         <button 
-          onClick={onUndo} disabled={!canUndo}
-          className="p-1.5 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded disabled:opacity-30"
-          title="復原（Ctrl＋Z）"
-        >
-          <Undo size={16} />
-        </button>
-        <button 
-          onClick={onRedo} disabled={!canRedo}
-          className="p-1.5 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded disabled:opacity-30"
-          title="重做（Ctrl＋Shift＋Z）"
-        >
-          <Redo size={16} />
-        </button>
-        <button 
-          onClick={onDeleteSelected} disabled={!hasSelection}
-          className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded disabled:opacity-30 disabled:hover:bg-transparent"
-          title="刪除選取物件"
-        >
-          <Trash2 size={16} />
-        </button>
-         <button 
-          onClick={onClearAll}
-          className="p-1.5 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 rounded hover:text-red-500 dark:hover:text-red-400"
-          title="清除所有標註"
-        >
-          <FileX size={16} />
-        </button>
+        </div>}
       </div>
 
-      <div className="hidden lg:block flex-grow"></div>
-
-      {selectionCount > 1 && (
-        <div className="flex items-center gap-0.5 rounded bg-brand-50 p-0.5 text-[10px] text-brand-700 dark:bg-slate-700 dark:text-brand-300" title="對齊選取物件；按住 Shift 點擊可調整選取範圍">
-          <span className="px-1 font-semibold">{selectionCount} 個已選取</span>
-          {[
-            ['left', '左', '靠左對齊'],
-            ['centerX', '中', '水平置中'],
-            ['right', '右', '靠右對齊'],
-            ['top', '上', '靠上對齊'],
-            ['centerY', '中', '垂直置中'],
-            ['bottom', '下', '靠下對齊'],
-          ].map(([action, label, title]) => (
-            <button
-              key={action}
-              onClick={() => onAlign(action as 'left' | 'centerX' | 'right' | 'top' | 'centerY' | 'bottom')}
-              className="h-6 min-w-6 rounded bg-white px-1 font-bold shadow-sm hover:bg-brand-100 dark:bg-slate-600 dark:hover:bg-slate-500"
-              title={title}
-            >
-              {label}
-            </button>
-          ))}
+      {layout.history && <div className="toolbar-history text-slate-600 dark:text-slate-300">
+        <button type="button" className="toolbar-icon" title="復原（Ctrl＋Z）" aria-label="復原（Ctrl＋Z）" disabled={!canUndo} onClick={onUndo}><Undo size={16} /></button>
+        <button type="button" className="toolbar-icon" title="重做（Ctrl＋Shift＋Z）" aria-label="重做（Ctrl＋Shift＋Z）" disabled={!canRedo} onClick={onRedo}><Redo size={16} /></button>
+      </div>}
+      <div className="toolbar-actions text-slate-600 dark:text-slate-300">
+        {layout.capture && <button type="button" data-action="tonal" title="擷取螢幕（Alt＋S）" aria-label="擷取" onClick={onScreenCapture}><MonitorUp size={16} /><span>擷取</span></button>}
+        {layout.copy && <button type="button" data-action="tonal" title="複製（Ctrl＋C）" aria-label="複製" onClick={onCopy}><Copy size={16} /><span>複製</span></button>}
+        <button type="button" data-action="primary" title="匯出目前圖片" aria-label="匯出" onClick={onSave} className="bg-brand-600 text-white"><Save size={16} /><span>匯出</span></button>
+        <button type="button" data-action="secondary" title="匯出所有分頁" aria-label="全部匯出" onClick={onSaveAll} className="bg-slate-700 text-white"><Files size={16} /><span>全部匯出</span></button>
+        <div className="relative">
+          <button type="button" className="toolbar-icon" aria-label="更多工具與操作" title="更多工具與操作" aria-expanded={openPopover === 'more'} onClick={() => togglePopover('more')}><MoreHorizontal size={18} /></button>
+          {openPopover === 'more' && <div className={`${glassPanelClass} toolbar-more`} role="dialog" aria-label="更多工具與操作">
+            <strong className="w-full text-xs">所有工具</strong>
+            <div className="toolbar-tool-grid">{[...mainTools, ...drawTools, ...shapeTools, { id: 'symbol', icon: SmilePlus, label: '圖示與符號庫' }].map(tool => <button key={tool.id} type="button" title={tool.label} aria-label={`切換至${tool.label}`} aria-pressed={currentTool === tool.id} onClick={() => { selectTool(tool.id as ToolType); if (tool.id === 'symbol') setOpenPopover('symbols'); }}><tool.icon size={17} /><span>{tool.label}</span></button>)}</div>
+            <strong className="w-full text-xs">檔案與編輯</strong>
+            <div className="toolbar-menu-grid">{[
+              { label: '復原', icon: Undo, action: onUndo, disabled: !canUndo },
+              { label: '重做', icon: Redo, action: onRedo, disabled: !canRedo },
+              { label: '開啟圖片', icon: FolderOpen, action: onOpenFile },
+              { label: '擷取螢幕', icon: MonitorUp, action: onScreenCapture },
+              { label: '複製', icon: Copy, action: onCopy },
+              { label: '刪除選取物件', icon: Trash2, action: onDeleteSelected, disabled: !hasSelection },
+              { label: '清除所有標註', icon: FileX, action: onClearAll },
+              { label: selectedElement?.locked ? '解除鎖定' : '鎖定', icon: selectedElement?.locked ? Unlock : Lock, action: onToggleLock, disabled: !hasSelection },
+              { label: darkMode ? '切換亮色模式' : '切換暗色模式', icon: darkMode ? Sun : Moon, action: toggleDarkMode },
+            ].map(item => <button key={item.label} type="button" disabled={item.disabled} onClick={() => { setOpenPopover(null); item.action(); }}><item.icon size={16} />{item.label}</button>)}</div>
+            {hasSelection && <><strong className="w-full text-xs">圖層順序</strong><div className="toolbar-menu-grid">{([
+              ['front', '移至最上層', BringToFront], ['forward', '向上移一層', ChevronUp],
+              ['backward', '向下移一層', ChevronDown], ['back', '移至最下層', SendToBack],
+            ] as const).map(([action, label, Icon]) => <button type="button" key={action} onClick={() => { onLayerOrder(action); setOpenPopover(null); }}><Icon size={16} />{label}</button>)}</div></>}
+            {selectionCount > 1 && <><strong className="w-full text-xs">對齊 {selectionCount} 個物件</strong><div className="toolbar-menu-grid">{([
+              ['left', '靠左對齊'], ['centerX', '水平置中'], ['right', '靠右對齊'],
+              ['top', '靠上對齊'], ['centerY', '垂直置中'], ['bottom', '靠下對齊'],
+            ] as const).map(([action, label]) => <button type="button" key={action} onClick={() => { onAlign(action); setOpenPopover(null); }}>{label}</button>)}</div></>}
+          </div>}
         </div>
-      )}
-
-      {/* Layer Actions */}
-      {hasSelection && (
-         <div className="flex items-center gap-0.5 bg-slate-100 dark:bg-slate-700 p-0.5 rounded shrink-0 hidden md:flex">
-            <button onClick={() => onLayerOrder('front')} className="p-1 hover:bg-white dark:hover:bg-slate-600 rounded text-slate-600 dark:text-slate-300" title="移至最上層">
-                <BringToFront size={14} />
-            </button>
-             <button onClick={() => onLayerOrder('forward')} className="p-1 hover:bg-white dark:hover:bg-slate-600 rounded text-slate-600 dark:text-slate-300" title="向上移一層">
-                <ChevronUp size={14} />
-            </button>
-            <button onClick={() => onLayerOrder('backward')} className="p-1 hover:bg-white dark:hover:bg-slate-600 rounded text-slate-600 dark:text-slate-300" title="向下移一層">
-                <ChevronDown size={14} />
-            </button>
-            <button onClick={() => onLayerOrder('back')} className="p-1 hover:bg-white dark:hover:bg-slate-600 rounded text-slate-600 dark:text-slate-300" title="移至最下層">
-                <SendToBack size={14} />
-            </button>
-         </div>
-      )}
-
-      {/* Right Side Actions */}
-      <div className="toolbar-actions flex gap-1 items-center shrink-0">
-        <button 
-          onClick={onToggleLock} disabled={!hasSelection}
-          className={`p-1.5 rounded disabled:opacity-30 disabled:hover:bg-transparent transition-colors ${
-              selectedElement?.locked 
-              ? 'text-red-500 bg-red-50 dark:bg-red-900/20' 
-              : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
-          }`}
-          title={selectedElement?.locked ? "解除鎖定" : "鎖定"}
-        >
-          {selectedElement?.locked ? <Lock size={16} /> : <Unlock size={16} />}
-        </button>
-
-        <div className="w-px h-6 bg-slate-300 dark:bg-slate-600 mx-1 hidden sm:block"></div>
-
-        <button
-          onClick={onScreenCapture}
-          data-action="tonal"
-          className="flex items-center gap-1.5 px-2 py-1 bg-sky-50 dark:bg-sky-900/30 text-sky-700 dark:text-sky-300 hover:bg-sky-100 dark:hover:bg-sky-900/50 rounded-lg font-medium text-xs transition-colors h-8"
-          title="擷取螢幕（Alt＋S）"
-        >
-          <MonitorUp size={14} />
-          <span className="hidden sm:inline">擷取</span>
-        </button>
-
-        <button 
-          onClick={onCopy}
-          data-action="tonal"
-          className="flex items-center gap-1.5 px-2 py-1 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 rounded-lg font-medium text-xs transition-colors h-8"
-          title="複製（Ctrl＋C）"
-        >
-          <Copy size={14} />
-          <span className="hidden sm:inline">複製</span>
-        </button>
-        <button 
-          onClick={onOpenFile}
-          data-action="tonal"
-          className="flex items-center gap-1.5 px-2 py-1 bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50 rounded-lg font-medium text-xs transition-colors h-8"
-          title="開啟圖片"
-        >
-          <FolderOpen size={14} />
-          <span className="hidden sm:inline">開啟</span>
-        </button>
-        <button 
-          onClick={onSave}
-          data-action="primary"
-          className="flex items-center gap-1.5 px-2 py-1 bg-brand-600 text-white hover:bg-brand-700 rounded-lg font-medium shadow-sm text-xs transition-colors h-8"
-          title="匯出目前圖片"
-        >
-          <Save size={14} />
-          <span className="hidden sm:inline">匯出</span>
-        </button>
-        <button 
-          onClick={onSaveAll}
-          data-action="secondary"
-          className="flex items-center gap-1.5 px-2 py-1 bg-slate-700 text-white hover:bg-slate-800 dark:bg-slate-600 dark:hover:bg-slate-500 rounded-lg font-medium shadow-sm text-xs transition-colors h-8"
-          title="匯出所有分頁"
-        >
-          <Files size={14} />
-          <span className="hidden sm:inline">全部匯出</span>
-        </button>
-
-        <button
-          onClick={toggleDarkMode}
-          title={darkMode ? '切換亮色模式' : '切換暗色模式'}
-          aria-label={darkMode ? '切換亮色模式' : '切換暗色模式'}
-          aria-pressed={darkMode}
-          className="ml-1 p-1.5 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
-        >
-            {darkMode ? <Sun size={16} /> : <Moon size={16} />}
-        </button>
       </div>
     </div>
   );
