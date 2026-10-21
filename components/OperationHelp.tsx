@@ -37,6 +37,8 @@ const SHORTCUT_GROUPS = [
       { keys: ['Shift', '拖曳'], label: '自由螢光筆保持水平' },
       { keys: ['Shift', '拉畫布邊界'], label: '畫布尺寸以 50px 為單位調整' },
       { keys: ['雙擊名稱'], label: '重新命名圖層或分頁' },
+      { keys: ['滑鼠中鍵'], label: '關閉分頁', detail: '點擊上方分頁；有圖片或標註時會先確認' },
+      { keys: ['分頁右鍵'], label: '批次關閉分頁', detail: '關閉其他、右側、全部或空白分頁；也可聚焦分頁後按 Shift＋F10' },
     ],
   },
 ];

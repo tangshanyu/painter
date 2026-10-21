@@ -4,8 +4,8 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const bundled = await build({
-  stdin: { contents: `export * from './utils/toolSettings'; export * from './utils/appearance'; export * from './utils/callout'; export * from './utils/documents'; export * from './utils/toolbarLayout'; export { resizeCanvasDocument } from './utils/canvasResize'; export { createDocumentSnapshot } from './utils/history'; export { getElementBounds, getResizeHandleType, isPointInElement, renderCanvas } from './utils/draw'; export { DEFAULT_TOOL_SETTINGS, DEFAULT_TOOL_SIZES } from './constants';`, resolveDir: root, loader: 'ts' },
-  bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'silent',
+  stdin: { contents: `export * from './utils/toolSettings'; export * from './utils/appearance'; export * from './utils/callout'; export * from './utils/documents'; export * from './utils/toolbarLayout'; export { preventTabMiddleScroll, closeTabWithMiddleClick } from './components/TabList'; export { resizeCanvasDocument } from './utils/canvasResize'; export { createDocumentSnapshot } from './utils/history'; export { getElementBounds, getResizeHandleType, isPointInElement, renderCanvas } from './utils/draw'; export { DEFAULT_TOOL_SETTINGS, DEFAULT_TOOL_SIZES } from './constants';`, resolveDir: root, loader: 'ts' },
+  bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'silent', loader: { '.css': 'empty' },
 });
 const api = await import(`data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString('base64')}`);
 const { DEFAULT_TOOL_SETTINGS, DEFAULT_TOOL_SIZES, getCreationSettings, getToolSize, getElementSize, getSettingsForElement, rememberToolSettings, restoreToolSettings, applyElementStyle, applyToolSettingsToElement, normalizeToolSize, getMinimumToolSize, getElementBounds, renderCanvas, createMaterialTheme, contrastRatio, THEME_COLORS, normalizeThemeColor } = api;
@@ -184,3 +184,122 @@ for (const width of [320,375,419,420,599,600,799,800,1049,1050,1199,1200,1440]) 
   ok(new Set(layout.direct).size===layout.direct.length,'Toolbar does not duplicate visible tools');
 }
 console.log(`Passed ${checks} total assertions including compact-toolbar policies and new/close document workflows.`);
+
+const { preventTabMiddleScroll, closeTabWithMiddleClick } = api;
+for (const button of [0, 1, 2, 3, 4]) {
+  let prevented = 0, stopped = 0;
+  const event = { button, preventDefault: () => prevented++, stopPropagation: () => stopped++ };
+  const closed = [];
+  preventTabMiddleScroll(event);
+  equal(prevented, button === 1 ? 1 : 0, 'Only middle mousedown disables browser autoscroll');
+  equal(closed.length, 0, 'Mousedown alone never closes a document');
+  closeTabWithMiddleClick('target', event, (id, receivedEvent) => closed.push({ id, receivedEvent }));
+  equal(closed, button === 1 ? [{ id: 'target', receivedEvent: event }] : [], 'Only middle release invokes existing close workflow once');
+  equal(prevented, button === 1 ? 2 : 0, 'Middle auxclick also prevents native default action');
+  equal(stopped, button === 1 ? 1 : 0, 'Middle close does not propagate or switch tabs');
+}
+for (const target of ['a', 'b', 'c']) {
+  let result;
+  const event = { button: 1, preventDefault() {}, stopPropagation() {} };
+  closeTabWithMiddleClick(target, event, id => { result = closeDocument(docs, 'b', id); });
+  equal(result.tabs.map(tab => tab.id), docs.filter(tab => tab.id !== target).map(tab => tab.id), 'Middle click targets active or inactive document without closing its neighbor');
+  equal(result.activeId, target === 'b' ? 'c' : 'b', 'Inactive middle close preserves active document');
+}
+console.log(`Passed ${checks} total assertions including middle-button document closing.`);
+
+const { closeDocuments, documentHasContent, getDocumentCloseIds } = api;
+const bulkDocs = [
+  createEmptyDocument('empty', '空白'),
+  { ...createEmptyDocument('image', '圖片'), imageDataUrl: 'data:image/png;base64,test' },
+  { ...createEmptyDocument('drawing', '標註'), elements: [{ id: 'locked', hidden: true, locked: true }] },
+  createEmptyDocument('last', '最後空白', 2000, 1500),
+];
+equal(bulkDocs.map(documentHasContent), [false, true, true, false], 'Blank detection never treats hidden/locked annotations as empty');
+equal(getDocumentCloseIds(bulkDocs, 'image', 'others'), ['empty', 'drawing', 'last'], 'Other close is anchored to right-clicked tab, not active tab');
+equal(getDocumentCloseIds(bulkDocs, 'image', 'right'), ['drawing', 'last'], 'Right close preserves left and anchor tabs');
+equal(getDocumentCloseIds(bulkDocs, 'last', 'right'), [], 'Right close disables at last tab');
+equal(getDocumentCloseIds(bulkDocs, 'image', 'all'), bulkDocs.map(tab => tab.id), 'All closes entire workspace');
+equal(getDocumentCloseIds(bulkDocs, 'image', 'empty'), ['empty', 'last'], 'Only genuinely blank tabs are cleared regardless of dimensions');
+for (const action of ['all', 'others', 'right', 'empty']) {
+  equal(getDocumentCloseIds([], 'missing', action), [], 'No targets in empty workspace');
+  equal(getDocumentCloseIds(bulkDocs, 'missing', action), [], 'Stale context-menu anchor cannot close any documents');
+}
+equal(getDocumentCloseIds([blank], 'a', 'others'), [], 'Other close disables with one tab');
+for (let mask = 0; mask < 16; mask++) {
+  const ids = bulkDocs.filter((_, index) => mask & (1 << index)).map(tab => tab.id);
+  for (const active of bulkDocs) {
+    const before = JSON.stringify(bulkDocs);
+    const result = closeDocuments(bulkDocs, active.id, [...ids, ...ids, 'missing']);
+    const remaining = bulkDocs.filter(tab => !ids.includes(tab.id));
+    equal(result.tabs, remaining, 'Batch removal is atomic, ordered, duplicate-safe and ignores missing IDs');
+    const nextActive = ids.includes(active.id)
+      ? bulkDocs.slice(bulkDocs.indexOf(active) + 1).find(tab => !ids.includes(tab.id))
+        ?? bulkDocs.slice(0, bulkDocs.indexOf(active)).reverse().find(tab => !ids.includes(tab.id))
+      : active;
+    equal(result.activeId, nextActive?.id ?? '', 'Prefer surviving right neighbor, then left; empty workspace has no active tab');
+    equal(JSON.stringify(bulkDocs), before, 'Batch close does not mutate documents, images or history');
+    ok(remaining.every((tab, index) => result.tabs[index] === tab), 'Surviving documents retain object identity and history');
+  }
+}
+
+const storageBundle = await build({
+  stdin: { contents: "export { createWorkspaceWriter } from './utils/storage';", resolveDir: root, loader: 'ts' },
+  bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'silent',
+});
+const { createWorkspaceWriter } = await import(`data:text/javascript;base64,${Buffer.from(storageBundle.outputFiles[0].text).toString('base64')}`);
+const writeOrder = [];
+let releaseOldSave;
+const writer = createWorkspaceWriter(async value => {
+  writeOrder.push(`start:${value}`);
+  if (value === 'old') await new Promise(resolve => { releaseOldSave = resolve; });
+  if (value === 'fail') throw new Error('simulated storage failure');
+  writeOrder.push(`done:${value}`);
+});
+const oldSave = writer('old');
+const closeSave = writer('close');
+while (!releaseOldSave) await Promise.resolve();
+equal(writeOrder, ['start:old'], 'Close save waits for an in-flight older autosave');
+releaseOldSave();
+await Promise.all([oldSave, closeSave]);
+equal(writeOrder, ['start:old', 'done:old', 'start:close', 'done:close'], 'Closed tabs cannot be reopened by an older save finishing late');
+await assert.rejects(writer('fail'), /simulated storage failure/);
+await writer('retry');
+equal(writeOrder.slice(-3), ['start:fail', 'start:retry', 'done:retry'], 'Persistence failures remain retryable');
+console.log(`Passed ${checks} total assertions including all batch-close combinations and serialized workspace persistence.`);
+
+const { getNextDocumentNumber } = api;
+for (const counter of [1, 2, 37, 1000]) {
+  const allClosed = closeDocuments(bulkDocs, 'image', bulkDocs.map(tab => tab.id));
+  equal(getNextDocumentNumber(allClosed.tabs.length, counter), 1, 'Closing all tabs restarts naming at 圖片_001');
+  const lastClosed = closeDocument([blank], blank.id, blank.id);
+  equal(getNextDocumentNumber(lastClosed.tabs.length, counter), 1, 'Closing the last tab by X or middle button also restarts numbering');
+  const partialClose = closeDocuments(bulkDocs, 'image', ['empty', 'last']);
+  equal(getNextDocumentNumber(partialClose.tabs.length, counter), counter, 'Partial close never fills gaps or restarts numbering');
+  equal(partialClose.tabs.map(tab => tab.title), ['圖片', '標註'], 'Existing custom names are untouched');
+  const restoredEmpty = JSON.parse(JSON.stringify({ tabs: [], tabCounter: counter }));
+  equal(getNextDocumentNumber(restoredEmpty.tabs.length, restoredEmpty.tabCounter), 1, 'Restoring an empty workspace resets legacy numbering');
+  const restoredOpen = JSON.parse(JSON.stringify({ tabs: bulkDocs, tabCounter: counter }));
+  equal(getNextDocumentNumber(restoredOpen.tabs.length, restoredOpen.tabCounter), counter, 'Restoring open tabs keeps the saved sequence');
+}
+console.log(`Passed ${checks} total assertions including numbering reset after the final tab closes.`);
+
+const viewportBundle = await build({
+  stdin: { contents: "export { calculateCanvasFitScale } from './utils/viewport';", resolveDir: root, loader: 'ts' },
+  bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'silent',
+});
+const { calculateCanvasFitScale } = await import(`data:text/javascript;base64,${Buffer.from(viewportBundle.outputFiles[0].text).toString('base64')}`);
+for (const [vw, vh] of [[320, 400], [600, 400], [1120, 650], [1920, 1080]]) {
+  for (const [width, height] of [[800, 600], [4000, 1000], [800, 6000], [100, 100]]) {
+    const scale = calculateCanvasFitScale(width, height, vw, vh);
+    ok(scale > 0 && scale <= 1, 'Initial fit is positive and never upscales small images');
+    ok(width * scale <= vw - 64 + 1e-8 && height * scale <= vh - 64 + 1e-8, 'Both canvas edges fit with gutters, including narrow windows and tall images');
+    equal(scale, Math.min((vw - 64) / width, (vh - 64) / height, 1), 'Initial, new-tab and manual fit share the same scale calculation');
+  }
+}
+equal(calculateCanvasFitScale(800, 600, 864, 664), 1, 'Exact-fit canvas uses 100%');
+equal(calculateCanvasFitScale(800, 600, 464, 664), 0.5, 'Width-limited canvas fits at 50%');
+equal(calculateCanvasFitScale(800, 600, 864, 364), 0.5, 'Height-limited canvas fits at 50%');
+for (const dimensions of [[0, 600, 800, 600], [800, -1, 800, 600], [800, 600, NaN, 600], [Infinity, 600, 800, 600]]) {
+  equal(calculateCanvasFitScale(...dimensions), 1, 'Invalid or unmeasured dimensions never produce NaN/Infinity zoom');
+}
+console.log(`Passed ${checks} total assertions including initial canvas fit-to-viewport.`);

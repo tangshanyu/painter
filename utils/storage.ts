@@ -41,7 +41,7 @@ export const loadWorkspace = async (): Promise<StoredWorkspace | null> => {
   }
 };
 
-export const saveWorkspace = async (workspace: StoredWorkspace): Promise<void> => {
+const writeWorkspace = async (workspace: StoredWorkspace): Promise<void> => {
   const db = await openDatabase();
   try {
     await new Promise<void>((resolve, reject) => {
@@ -55,3 +55,15 @@ export const saveWorkspace = async (workspace: StoredWorkspace): Promise<void> =
     db.close();
   }
 };
+
+// Keep an older debounced autosave from committing after a newer close operation.
+export function createWorkspaceWriter<T>(write: (value: T) => Promise<void>) {
+  let queue = Promise.resolve();
+  return (value: T): Promise<void> => {
+    const result = queue.catch(() => {}).then(() => write(value));
+    queue = result;
+    return result;
+  };
+}
+
+export const saveWorkspace = createWorkspaceWriter(writeWorkspace);

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import { Minus, Plus, Maximize, PanelTopOpen, FilePlus2, FolderOpen } from 'lucide-react';
 import TabList from './components/TabList';
 import Toolbar from './components/Toolbar';
@@ -7,7 +7,8 @@ import LayerPanel from './components/LayerPanel';
 import PropertiesPanel from './components/PropertiesPanel';
 import OperationHelp from './components/OperationHelp';
 import AppearanceMenu from './components/AppearanceMenu';
-import { createEmptyDocument, closeDocument } from './utils/documents';
+import { createEmptyDocument, closeDocuments, documentHasContent, getNextDocumentNumber } from './utils/documents';
+import CloseTabsDialog from './components/CloseTabsDialog';
 import { createMaterialTheme, DEFAULT_THEME_COLOR, normalizeThemeColor } from './utils/appearance';
 import { applyElementStyle, applyToolSettingsToElement, getCreationSettings, getSettingsForElement, normalizeToolSize, rememberToolSettings, restoreToolSettings } from './utils/toolSettings';
 import './components/StatusBar.css';
@@ -20,6 +21,7 @@ import { blobToDataURL, getElementBounds, renderCanvas } from './utils/draw';
 import { createDocumentSnapshot, createInitialSnapshot } from './utils/history';
 import { loadWorkspace, saveWorkspace } from './utils/storage';
 import { resizeCanvasDocument } from './utils/canvasResize';
+import { calculateCanvasFitScale } from './utils/viewport';
 import { getCalloutWorldTip, withCalloutWorldTip } from './utils/callout';
 
 const DEFAULT_WIDTH = 800;
@@ -56,6 +58,26 @@ function App() {
   const [canvasSpaceDialogOpen, setCanvasSpaceDialogOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workspaceSaveTimerRef = useRef<number | null>(null);
+  const initialFitAppliedRef = useRef(false);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const closeBusyRef = useRef(false);
+  const [pendingClose, setPendingClose] = useState<{ ids: string[]; label: string } | null>(null);
+  const [closingTabs, setClosingTabs] = useState(false);
+  const [closeError, setCloseError] = useState('');
+
+  useEffect(() => {
+    if (!pendingClose && !closingTabs) return;
+    const workspace = workspaceRef.current;
+    workspace?.setAttribute('inert', '');
+    const blockTransfer = (event: Event) => { event.preventDefault(); event.stopImmediatePropagation(); };
+    document.addEventListener('paste', blockTransfer, true);
+    document.addEventListener('drop', blockTransfer, true);
+    return () => {
+      workspace?.removeAttribute('inert');
+      document.removeEventListener('paste', blockTransfer, true);
+      document.removeEventListener('drop', blockTransfer, true);
+    };
+  }, [pendingClose, closingTabs]);
 
   useEffect(() => {
     try { localStorage.setItem('painter-appearance', appearance); } catch { /* Local preferences are optional. */ }
@@ -145,7 +167,7 @@ function App() {
         if (cancelled || !saved || saved.version !== 1) return;
         setTabs(saved.tabs);
         setActiveTabId(saved.tabs.some(tab => tab.id === saved.activeTabId) ? saved.activeTabId : saved.tabs[0]?.id ?? '');
-        setTabCounter(saved.tabCounter);
+        setTabCounter(getNextDocumentNumber(saved.tabs.length, saved.tabCounter));
         setStampCounter(saved.stampCounter);
         setDarkMode(saved.darkMode);
         setToolSettings(restoreToolSettings(saved.toolSettings));
@@ -163,7 +185,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!workspaceReady) return;
+    if (!workspaceReady || closingTabs) return;
     setSaveStatus('saving');
     const timeoutId = window.setTimeout(async () => {
       try {
@@ -190,7 +212,7 @@ function App() {
     }, 600);
     workspaceSaveTimerRef.current = timeoutId;
     return () => window.clearTimeout(timeoutId);
-  }, [workspaceReady, tabs, activeTabId, tabCounter, stampCounter, darkMode, toolSettings]);
+  }, [workspaceReady, closingTabs, tabs, activeTabId, tabCounter, stampCounter, darkMode, toolSettings]);
 
   const hasDocument = tabs.length > 0;
   const activeTab = tabs.find(t => t.id === activeTabId) || tabs[0] || EMPTY_DOCUMENT;
@@ -219,14 +241,26 @@ function App() {
 
   const calculateFitScale = useCallback((imgW: number, imgH: number) => {
     const editorViewport = document.querySelector<HTMLElement>('[data-editor-viewport]');
-    const viewportRect = editorViewport?.getBoundingClientRect();
-    const availableW = Math.max(100, (viewportRect?.width ?? window.innerWidth) - 64);
-    const availableH = Math.max(100, (viewportRect?.height ?? (window.innerHeight - 110)) - 64);
-    if (imgW <= 0 || imgH <= 0) return 1;
-    const scaleW = availableW / imgW;
-    const scaleH = availableH / imgH;
-    return Math.min(scaleW, scaleH, 1);
+    return calculateCanvasFitScale(imgW, imgH,
+      editorViewport?.clientWidth || window.innerWidth,
+      editorViewport?.clientHeight || window.innerHeight - 110);
   }, []);
+
+  useLayoutEffect(() => {
+    if (!workspaceReady) return;
+    if (!hasDocument) { initialFitAppliedRef.current = false; return; }
+    if (initialFitAppliedRef.current) return;
+    const viewport = document.querySelector<HTMLElement>('[data-editor-viewport]');
+    if (!viewport || viewport.clientWidth <= 0 || viewport.clientHeight <= 0) return;
+    // The editor and side panels must exist before measuring the actual usable area.
+    initialFitAppliedRef.current = true;
+    setTabs(previous => previous.map(tab => {
+      const scale = calculateFitScale(tab.canvasWidth, tab.canvasHeight);
+      return scale === tab.scale ? tab : { ...tab, scale };
+    }));
+    viewport.scrollLeft = 0;
+    viewport.scrollTop = 0;
+  }, [workspaceReady, hasDocument, calculateFitScale]);
 
   const selectedElement = selectedElements[selectedElements.length - 1];
   // Drawing controls configure the next object, even when the last placed object is selected.
@@ -529,7 +563,7 @@ function App() {
     const newId = crypto.randomUUID();
     const title = `圖片_${String(tabCounter).padStart(3, '0')}`;
     setTabCounter(prev => prev + 1);
-    const initialScale = imgData ? calculateFitScale(w, h) : 1;
+    const initialScale = calculateFitScale(w, h);
     const newTab: TabData = {
       ...createEmptyDocument(newId, title, w, h, initialScale),
       id: newId,
@@ -548,28 +582,48 @@ function App() {
     setActiveTool('select'); 
   }, [tabCounter, calculateFitScale, setSelectedElementId]);
 
-  const closeTab = async (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const tabToClose = tabs.find(t => t.id === id);
-    if (tabToClose && (tabToClose.elements.length > 0 || tabToClose.imageDataUrl)) {
-        if (!window.confirm('關閉這個分頁後，內容將從本機工作區移除。確定要關閉嗎？')) return;
-    }
-    const next = closeDocument(tabs, activeTabId, id);
+  const performClose = async (ids: string[], label: string) => {
+    if (closeBusyRef.current) return;
+    const next = closeDocuments(tabs, activeTabId, ids);
+    if (next.tabs === tabs) { setPendingClose(null); return; }
+    const nextTabCounter = getNextDocumentNumber(next.tabs.length, tabCounter);
+    closeBusyRef.current = true;
+    setClosingTabs(true);
+    setCloseError('');
     // Persist a close before displaying the start page, so a quick refresh cannot reopen it.
     if (workspaceSaveTimerRef.current !== null) window.clearTimeout(workspaceSaveTimerRef.current);
     try {
       await saveWorkspace({ version: 1, savedAt: Date.now(),
         tabs: next.tabs.map(tab => ({ ...tab, history: [createDocumentSnapshot(tab)], historyIndex: 0 })),
-        activeTabId: next.activeId, tabCounter, stampCounter, darkMode, toolSettings });
+        activeTabId: next.activeId, tabCounter: nextTabCounter, stampCounter, darkMode, toolSettings });
+      setTabs(next.tabs);
+      setActiveTabId(next.activeId);
+      setTabCounter(nextTabCounter);
+      if (activeTabId !== next.activeId) { setSelectedElementId(null); setActiveTool('select'); }
+      setExportDialogOpen(false);
+      setCanvasSpaceDialogOpen(false);
+      setPendingClose(null);
+      setSaveStatus('saved');
     } catch {
-      alert('無法儲存關閉狀態，檔案暫時保留。請稍後再試。');
-      return;
-    }
-    setTabs(next.tabs);
-    setActiveTabId(next.activeId);
-    if (activeTabId === id) { setSelectedElementId(null); setActiveTool('select'); }
-    setExportDialogOpen(false);
-    setCanvasSpaceDialogOpen(false);
+      setCloseError('無法儲存關閉狀態，所有分頁均保留。請稍後重試。');
+      setPendingClose({ ids, label });
+      setSaveStatus('error');
+    } finally { closeBusyRef.current = false; setClosingTabs(false); }
+  };
+
+  const requestClose = (ids: string[], label: string) => {
+    if (closeBusyRef.current || pendingClose) return;
+    const targets = tabs.filter(tab => ids.includes(tab.id));
+    if (!targets.length) return;
+    setCloseError('');
+    const request = { ids: targets.map(tab => tab.id), label };
+    if (targets.some(documentHasContent)) setPendingClose(request);
+    else void performClose(request.ids, label);
+  };
+
+  const closeTab = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    requestClose([id], '關閉分頁');
   };
 
   const processImageBlob = useCallback(async (blob: Blob) => {
@@ -908,6 +962,7 @@ function App() {
 
   useEffect(() => {
       const handleKeyDown = (e: KeyboardEvent) => {
+          if (pendingClose || closingTabs) return;
           if (!hasDocument) return;
           const target = e.target as HTMLElement;
           const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA';
@@ -944,7 +999,7 @@ function App() {
       };
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [performUndo, performRedo, handleDeleteSelected, handleCopy, handleDuplicateSelected, hasDocument]);
+  }, [performUndo, performRedo, handleDeleteSelected, handleCopy, handleDuplicateSelected, hasDocument, pendingClose, closingTabs]);
 
   const handleClearAll = () => {
       if (window.confirm('確定要清除所有標註與圖層嗎？背景圖片會保留。')) {
@@ -973,10 +1028,10 @@ function App() {
 
     let bgImg: HTMLImageElement | null = null;
     if (tab.imageDataUrl) {
-      bgImg = await new Promise<HTMLImageElement | null>((resolve) => {
+      bgImg = await new Promise<HTMLImageElement>((resolve, reject) => {
         const img = new Image();
         img.onload = () => resolve(img);
-        img.onerror = () => resolve(null);
+        img.onerror = () => reject(new Error('無法讀取背景圖片，已停止匯出以避免遺失內容'));
         img.src = tab.imageDataUrl!;
       });
     }
@@ -1044,11 +1099,13 @@ function App() {
 
   return (
     <div data-appearance={appearance} style={appearance === 'material' ? createMaterialTheme(themeColor, darkMode) as React.CSSProperties : undefined} className="painter-app flex flex-col h-screen bg-slate-100 dark:bg-slate-900 transition-colors">
+      <div ref={workspaceRef} className="flex min-h-0 flex-1 flex-col">
       <TabList 
         tabs={tabs} 
         activeTabId={activeTabId} 
         onSwitch={(id) => { setActiveTabId(id); setSelectedElementId(null); setStampCounter(1); }} 
         onClose={closeTab}
+        onCloseBatch={requestClose}
         onAdd={() => createNewTab()}
         onOpen={handleOpenFileClick}
         onRename={handleRenameTab}
@@ -1237,6 +1294,17 @@ function App() {
         onClose={() => setCanvasSpaceDialogOpen(false)}
         onApply={handleAddCanvasSpace}
       />
+      </div>
+      {pendingClose && <CloseTabsDialog
+        tabs={tabs.filter(tab => pendingClose.ids.includes(tab.id))}
+        label={pendingClose.label}
+        busy={closingTabs}
+        error={closeError}
+        onCancel={() => { if (!closeBusyRef.current) setPendingClose(null); }}
+        onConfirm={() => void performClose(pendingClose.ids, pendingClose.label)}
+        onExportAll={handleSaveAll}
+      />}
+      {closingTabs && !pendingClose && <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/20" role="status">正在儲存關閉狀態…</div>}
     </div>
   );
 }
